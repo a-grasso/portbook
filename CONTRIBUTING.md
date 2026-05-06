@@ -94,7 +94,9 @@ artifacts and creates a GitHub Release using the matching section of
 3. **Refresh the lockfile**: `cargo build`.
 4. **Regenerate the changelog**: `git cliff --tag vX.Y.Z -o CHANGELOG.md`.
 5. **Commit**: `git commit -am "chore(release): vX.Y.Z"`.
-6. **Tag and push**: `git tag vX.Y.Z && git push --follow-tags`.
+6. **Tag and push**: `git tag -a vX.Y.Z -m "vX.Y.Z" && git push --follow-tags`.
+   The annotated `-a` tag is required for `--follow-tags` to ship it;
+   lightweight tags stay local.
 
 Do **not** edit `CHANGELOG.md` by hand — it's regenerated from
 `git log`. If a release note is wrong, fix the underlying commit
