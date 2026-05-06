@@ -39,6 +39,18 @@ pub async fn host_guard(req: Request, next: Next) -> Result<Response, StatusCode
     Ok(next.run(req).await)
 }
 
+/// Generate a shell completion script for `cmd` and write it to `out`.
+/// Thin wrapper over clap_complete::generate so we can unit-test the
+/// surface without spinning up the full binary.
+pub fn print_completions<W: std::io::Write>(
+    shell: clap_complete::Shell,
+    cmd: &mut clap::Command,
+    out: &mut W,
+) {
+    let name = cmd.get_name().to_string();
+    clap_complete::generate(shell, cmd, name, out);
+}
+
 /// Convert a `-v` count flag into a `tracing-subscriber` env-filter
 /// directive. 0 = info, 1 = debug, 2+ = trace.
 pub fn tracing_filter(verbosity: u8) -> &'static str {
@@ -46,6 +58,39 @@ pub fn tracing_filter(verbosity: u8) -> &'static str {
         0 => "portbook=info,tower_http=warn",
         1 => "portbook=debug,tower_http=info",
         _ => "portbook=trace,tower_http=debug",
+    }
+}
+
+#[cfg(test)]
+mod completions_tests {
+    use clap::CommandFactory;
+    use clap_complete::Shell;
+
+    // A trivial Cli stand-in for completion tests so we don't depend on
+    // the binary's main.rs Cli struct from a lib test.
+    #[derive(clap::Parser)]
+    #[command(name = "portbook")]
+    struct DummyCli {
+        #[command(subcommand)]
+        _command: Option<DummyCmd>,
+    }
+    #[derive(clap::Subcommand)]
+    enum DummyCmd { Ls, Serve }
+
+    #[test]
+    fn print_completions_emits_non_empty_bash_script() {
+        let mut buf: Vec<u8> = Vec::new();
+        super::print_completions(Shell::Bash, &mut DummyCli::command(), &mut buf);
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.contains("portbook"), "completion script should mention the binary name");
+        assert!(out.len() > 100, "completion script should be substantial");
+    }
+
+    #[test]
+    fn print_completions_works_for_zsh() {
+        let mut buf: Vec<u8> = Vec::new();
+        super::print_completions(Shell::Zsh, &mut DummyCli::command(), &mut buf);
+        assert!(!buf.is_empty());
     }
 }
 

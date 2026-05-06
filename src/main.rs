@@ -1,6 +1,7 @@
-use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 use portbook::cli::{ColorChoice, LsOpts};
-use portbook::{AppState, BIND_ADDR, VersionState, build_app, scheduler::Scheduler, tracing_filter, version};
+use portbook::{AppState, BIND_ADDR, VersionState, build_app, print_completions, scheduler::Scheduler, tracing_filter, version};
 use std::net::SocketAddr;
 use tracing::info;
 
@@ -22,6 +23,11 @@ enum Command {
     Serve,
     /// List discovered ports in the terminal.
     Ls(LsArgs),
+    /// Generate shell completion script (e.g. `portbook completions zsh`).
+    Completions {
+        /// Target shell.
+        shell: Shell,
+    },
 }
 
 #[derive(Args, Default)]
@@ -71,6 +77,11 @@ async fn main() -> anyhow::Result<()> {
     match cmd {
         Command::Ls(args) => portbook::cli::run_ls(args.into()).await,
         Command::Serve => run_serve(cli.verbose).await,
+        Command::Completions { shell } => {
+            let mut cmd = Cli::command();
+            print_completions(shell, &mut cmd, &mut std::io::stdout());
+            Ok(())
+        }
     }
 }
 

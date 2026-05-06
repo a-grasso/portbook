@@ -25,6 +25,7 @@ anyhow = "1"
 futures = "0.3"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 terminal_size = "0.4"
 anstyle = "1"
 
