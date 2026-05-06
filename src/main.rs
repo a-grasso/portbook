@@ -30,11 +30,14 @@ struct LsArgs {
     /// Disable ANSI colors (auto-disabled when stdout isn't a tty).
     #[arg(long)]
     no_color: bool,
+    /// Emit a single JSON line (machine-readable, no colors).
+    #[arg(long)]
+    json: bool,
 }
 
 impl From<LsArgs> for LsOpts {
     fn from(a: LsArgs) -> Self {
-        LsOpts { all: a.all, live: a.live, no_color: a.no_color }
+        LsOpts { all: a.all, live: a.live, no_color: a.no_color, json: a.json }
     }
 }
 

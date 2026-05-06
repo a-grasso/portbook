@@ -5,13 +5,14 @@ use crate::BIND_ADDR;
 use crate::engine::Engine;
 use crate::probe::ProbeKind;
 use crate::state::{PortCard, Snapshot};
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 
 #[derive(Default, Debug, Clone, Copy)]
 pub struct LsOpts {
     pub all: bool,
     pub live: bool,
     pub no_color: bool,
+    pub json: bool,
 }
 
 pub async fn run_ls(opts: LsOpts) -> anyhow::Result<()> {
@@ -21,7 +22,9 @@ pub async fn run_ls(opts: LsOpts) -> anyhow::Result<()> {
     };
     let style = Style::resolve(opts.no_color);
     let width = term_width();
-    print_snapshot(&snapshot, opts, &style, width);
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    render(&mut out, &snapshot, opts, &style, width)?;
     Ok(())
 }
 
@@ -45,66 +48,80 @@ async fn one_shot_scan() -> anyhow::Result<Snapshot> {
 
 // ─── Rendering ───────────────────────────────────────────────────────
 
-fn print_snapshot(snap: &Snapshot, opts: LsOpts, s: &Style, width: usize) {
+pub fn render(
+    out: &mut impl Write,
+    snap: &Snapshot,
+    opts: LsOpts,
+    s: &Style,
+    width: usize,
+) -> std::io::Result<()> {
+    if opts.json {
+        // Single-line JSON for stream consumers; ignore styling.
+        let line = serde_json::to_string(snap).map_err(std::io::Error::other)?;
+        writeln!(out, "{}", line)?;
+        return Ok(());
+    }
+
     let total = snap.ports.len();
     let live: Vec<&PortCard> = snap.ports.iter().filter(|c| c.kind == ProbeKind::Live).collect();
     let errors: Vec<&PortCard> = snap.ports.iter().filter(|c| c.kind == ProbeKind::Error).collect();
     let dead: Vec<&PortCard> = snap.ports.iter().filter(|c| c.kind == ProbeKind::Dead).collect();
 
-    println!(
+    writeln!(
+        out,
         "{} · {} live · {} total\n",
         s.bold("portbook"),
         s.green(&live.len().to_string()),
         total,
-    );
+    )?;
 
     if total == 0 {
-        println!("  No listening ports detected.");
-        return;
+        writeln!(out, "  No listening ports detected.")?;
+        return Ok(());
     }
 
-    print_section("LIVE", '●', &live, opts, s, width, false);
+    write_section(out, "LIVE", '●', &live, opts, s, width)?;
     if !opts.live {
-        print_section("ERROR", '⚠', &errors, opts, s, width, false);
+        write_section(out, "ERROR", '⚠', &errors, opts, s, width)?;
         if opts.all {
-            print_section("DEAD", '·', &dead, opts, s, width, false);
+            write_section(out, "DEAD", '·', &dead, opts, s, width)?;
         } else if !dead.is_empty() {
-            println!(
+            writeln!(
+                out,
                 "  {}  {} dead {}",
                 s.dim("·"),
                 s.dim(&dead.len().to_string()),
                 s.dim("(pass --all to expand)"),
-            );
-            println!();
+            )?;
+            writeln!(out)?;
         }
     }
+    Ok(())
 }
 
-fn print_section(
+fn write_section(
+    out: &mut impl Write,
     name: &str,
     glyph: char,
     cards: &[&PortCard],
     _opts: LsOpts,
     s: &Style,
     width: usize,
-    _: bool,
-) {
+) -> std::io::Result<()> {
     if cards.is_empty() {
-        return;
+        return Ok(());
     }
-    println!(" {}", s.bold(name));
+    writeln!(out, " {}", s.bold(name))?;
 
     let mut sorted: Vec<&PortCard> = cards.to_vec();
     sorted.sort_by(|a, b| {
         a.project_name
             .as_deref()
-            .unwrap_or("\u{FFFF}") // None sorts last
+            .unwrap_or("\u{FFFF}")
             .cmp(b.project_name.as_deref().unwrap_or("\u{FFFF}"))
             .then(a.port.cmp(&b.port))
     });
 
-    // Compute column widths so port and project align across all rows in
-    // this section (strictly visible widths — no ANSI escapes counted).
     let port_w = sorted
         .iter()
         .map(|c| format!(":{}", c.port).chars().count())
@@ -117,12 +134,21 @@ fn print_section(
         .unwrap_or(0);
 
     for c in sorted {
-        print_card(c, glyph, s, width, port_w, project_w);
+        write_card(out, c, glyph, s, width, port_w, project_w)?;
     }
-    println!();
+    writeln!(out)?;
+    Ok(())
 }
 
-fn print_card(c: &PortCard, glyph: char, s: &Style, width: usize, port_w: usize, project_w: usize) {
+fn write_card(
+    out: &mut impl Write,
+    c: &PortCard,
+    glyph: char,
+    s: &Style,
+    width: usize,
+    port_w: usize,
+    project_w: usize,
+) -> std::io::Result<()> {
     let port_raw = format!(":{}", c.port);
     let port_pad = " ".repeat(port_w.saturating_sub(port_raw.chars().count()));
     let glyph_colored = match c.kind {
@@ -162,7 +188,7 @@ fn print_card(c: &PortCard, glyph: char, s: &Style, width: usize, port_w: usize,
     let body_budget = width.saturating_sub(head_vis + tail_vis).max(20);
 
     let body = truncate_visible(&title_or_reason, body_budget);
-    println!("{}{}{}", head, body, tail);
+    writeln!(out, "{}{}{}", head, body, tail)?;
 
     // Line 2: indented dim cmdline
     let cmd = c.cmdline.clone().unwrap_or_else(|| c.command.clone());
@@ -170,8 +196,9 @@ fn print_card(c: &PortCard, glyph: char, s: &Style, width: usize, port_w: usize,
         let indent = "      ";
         let cmd_budget = width.saturating_sub(indent.chars().count()).max(20);
         let cmd_truncated = truncate_chars(&cmd, cmd_budget);
-        println!("{}{}", indent, s.dim(&cmd_truncated));
+        writeln!(out, "{}{}", indent, s.dim(&cmd_truncated))?;
     }
+    Ok(())
 }
 
 // ─── Style helpers (anstyle-based, conditional) ──────────────────────
@@ -335,5 +362,72 @@ mod tests {
     fn truncate_visible_passes_through_when_under_budget() {
         let out = truncate_visible("hi", 10);
         assert_eq!(out, "hi");
+    }
+
+    // ─── JSON output ──────────────────────────────────────────────────
+
+    use crate::probe::{ProbeKind, ProbeResult};
+    use crate::process::ProcInfo;
+
+    fn fixture_snapshot() -> Snapshot {
+        let probe_live = ProbeResult {
+            kind: ProbeKind::Live,
+            status: Some(200),
+            title: Some("Hello".into()),
+            description: None,
+            reason: None,
+        };
+        let proc = ProcInfo { cwd: None, cmdline: Some("python -m http.server".into()) };
+        Snapshot {
+            ports: vec![PortCard::build(8000, 1234, "python".into(), &proc, &probe_live)],
+        }
+    }
+
+    #[test]
+    fn json_mode_emits_parseable_snapshot_with_ports_array() {
+        let snap = fixture_snapshot();
+        let opts = LsOpts { json: true, ..Default::default() };
+        let style = Style { enabled: false };
+        let mut buf: Vec<u8> = Vec::new();
+        render(&mut buf, &snap, opts, &style, 120).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&buf)
+            .expect("output must be valid JSON in --json mode");
+        let ports = parsed.get("ports").expect("must have ports field");
+        assert_eq!(ports.as_array().unwrap().len(), 1);
+        assert_eq!(ports[0]["port"], 8000);
+        assert_eq!(ports[0]["kind"], "live");
+    }
+
+    #[test]
+    fn json_mode_contains_no_ansi_escapes() {
+        let snap = fixture_snapshot();
+        let opts = LsOpts { json: true, ..Default::default() };
+        // Force style enabled — JSON must still be clean.
+        let style = Style { enabled: true };
+        let mut buf: Vec<u8> = Vec::new();
+        render(&mut buf, &snap, opts, &style, 120).unwrap();
+        assert!(!buf.contains(&b'\x1b'), "JSON output must contain no ANSI escapes");
+    }
+
+    #[test]
+    fn json_mode_ends_with_newline() {
+        let snap = fixture_snapshot();
+        let opts = LsOpts { json: true, ..Default::default() };
+        let style = Style { enabled: false };
+        let mut buf: Vec<u8> = Vec::new();
+        render(&mut buf, &snap, opts, &style, 120).unwrap();
+        assert_eq!(buf.last(), Some(&b'\n'), "JSON line must end with newline for stream consumers");
+    }
+
+    #[test]
+    fn human_mode_writes_to_provided_writer() {
+        let snap = fixture_snapshot();
+        let opts = LsOpts::default();
+        let style = Style { enabled: false };
+        let mut buf: Vec<u8> = Vec::new();
+        render(&mut buf, &snap, opts, &style, 120).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.contains("portbook"), "human mode should print the header");
+        assert!(out.contains(":8000"), "human mode should print the port");
     }
 }
