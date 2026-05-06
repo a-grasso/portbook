@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+use portbook::cli::LsOpts;
 use portbook::{AppState, BIND_ADDR, VersionState, build_app, scheduler::Scheduler, version};
 use std::net::SocketAddr;
 use tracing::info;
@@ -15,7 +16,26 @@ enum Command {
     /// Run the web UI server (default).
     Ui,
     /// List discovered ports in the terminal.
-    Ls,
+    Ls(LsArgs),
+}
+
+#[derive(Args, Default)]
+struct LsArgs {
+    /// Show all ports including dead ones (default: collapse dead).
+    #[arg(long)]
+    all: bool,
+    /// Show only live ports.
+    #[arg(long, conflicts_with = "all")]
+    live: bool,
+    /// Disable ANSI colors (auto-disabled when stdout isn't a tty).
+    #[arg(long)]
+    no_color: bool,
+}
+
+impl From<LsArgs> for LsOpts {
+    fn from(a: LsArgs) -> Self {
+        LsOpts { all: a.all, live: a.live, no_color: a.no_color }
+    }
 }
 
 #[tokio::main]
@@ -23,14 +43,14 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cmd = cli.command.unwrap_or_else(default_command);
     match cmd {
-        Command::Ls => portbook::cli::run_ls().await,
+        Command::Ls(args) => portbook::cli::run_ls(args.into()).await,
         Command::Ui => run_ui().await,
     }
 }
 
 fn default_command() -> Command {
     match std::env::var("PORTBOOK_DEFAULT").as_deref() {
-        Ok("ls") => Command::Ls,
+        Ok("ls") => Command::Ls(LsArgs::default()),
         _ => Command::Ui,
     }
 }
