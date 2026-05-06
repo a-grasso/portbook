@@ -72,7 +72,9 @@ function render(snapshot) {
     if (!entry) {
       const el = tpl.content.firstElementChild.cloneNode(true);
       el.addEventListener("click", (e) => {
-        if (!el.classList.contains("kind-live")) e.preventDefault();
+        if (!el.classList.contains("kind-live")) { e.preventDefault(); return; }
+        e.preventDefault();
+        window.open(el.href, `portbook-${c.port}`);
       });
       fillCard(el, c);
       nodes.set(c.port, { el, sig: sig(c) });
