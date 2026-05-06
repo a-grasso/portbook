@@ -38,7 +38,7 @@ impl PortCard {
             project_root,
             project_name,
             cwd: proc.cwd.clone(),
-            cmdline: proc.cmdline.clone(),
+            cmdline: proc.cmdline.as_deref().map(crate::redact::redact_cmdline),
             status: probe.status,
         }
     }
