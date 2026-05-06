@@ -1,4 +1,5 @@
 use crate::state::AppState;
+use crate::version::VersionState;
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -12,6 +13,10 @@ use tokio_stream::StreamExt;
 
 pub async fn ports(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.snapshot().await)
+}
+
+pub async fn version(State(v): State<VersionState>) -> impl IntoResponse {
+    Json(v.snapshot().await)
 }
 
 pub async fn stream(

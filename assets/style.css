@@ -89,6 +89,15 @@ header h1 {
   transition: color 0.12s ease;
 }
 .links a:hover { color: var(--accent); }
+.version {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+.update {
+  color: var(--warn) !important;
+  font-size: 11px;
+}
 
 main {
   display: grid;
