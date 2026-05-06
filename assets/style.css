@@ -78,6 +78,18 @@ header h1 {
   font-size: 12px;
 }
 
+.links {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+}
+.links a {
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 0.12s ease;
+}
+.links a:hover { color: var(--accent); }
+
 main {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
