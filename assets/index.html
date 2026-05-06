@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portbook</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>Portbook</h1>
+    <span id="status" class="dot" title="connecting"></span>
+    <span id="count"></span>
+  </header>
+  <main id="grid"></main>
+  <template id="card-tpl">
+    <a class="card" target="_blank" rel="noopener">
+      <div class="card-head">
+        <span class="port"></span>
+        <span class="project"></span>
+      </div>
+      <div class="title"></div>
+      <div class="desc"></div>
+      <div class="cmd"></div>
+    </a>
+  </template>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
