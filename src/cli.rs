@@ -1,6 +1,7 @@
+use crate::BIND_ADDR;
+use crate::engine::Engine;
 use crate::probe::ProbeKind;
 use crate::state::{PortCard, Snapshot};
-use crate::{BIND_ADDR, SELF_PORT};
 
 /// Run the `ls` command: print a table of port cards. Tries the running daemon
 /// first, falls back to a fresh one-shot scan if no daemon is reachable.
@@ -27,27 +28,7 @@ async fn fetch_from_daemon() -> Option<Snapshot> {
 }
 
 async fn one_shot_scan() -> anyhow::Result<Snapshot> {
-    let enumerator = crate::discovery::default();
-    let inspector = crate::process::default();
-    let prober = crate::probe::Prober::new();
-
-    let listeners: Vec<_> = enumerator
-        .list()?
-        .into_iter()
-        .filter(|l| l.port > 1024 && l.port != SELF_PORT)
-        .collect();
-
-    let mut ports: Vec<PortCard> = Vec::with_capacity(listeners.len());
-    for l in listeners {
-        let proc = if l.pid == 0 {
-            crate::process::ProcInfo::default()
-        } else {
-            inspector.inspect(l.pid)
-        };
-        let probe = prober.probe(l.port).await;
-        ports.push(PortCard::build(l.port, l.pid, l.command.clone(), &proc, &probe));
-    }
-    ports.sort_by_key(|c| c.port);
+    let ports = Engine::new().scan_all().await?;
     Ok(Snapshot { ports })
 }
 
