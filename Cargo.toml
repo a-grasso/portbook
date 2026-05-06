@@ -1,6 +1,6 @@
 [package]
 name = "portbook"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Local web dashboard that auto-discovers and labels HTTP dev services running on localhost ports."
 repository = "https://github.com/a-grasso/portbook"
