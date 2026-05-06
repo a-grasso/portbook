@@ -10,6 +10,10 @@
   <header>
     <h1>Portbook</h1>
     <span id="status" class="dot" title="connecting"></span>
+    <nav class="tabs">
+      <button class="tab active" data-tab="live">Live</button>
+      <button class="tab" data-tab="all">All</button>
+    </nav>
     <span id="count"></span>
   </header>
   <main id="grid"></main>
@@ -17,6 +21,7 @@
     <a class="card" target="_blank" rel="noopener">
       <div class="card-head">
         <span class="port"></span>
+        <span class="kind-badge"></span>
         <span class="project"></span>
       </div>
       <div class="title"></div>

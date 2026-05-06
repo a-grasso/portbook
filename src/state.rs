@@ -1,4 +1,4 @@
-use crate::probe::ProbeResult;
+use crate::probe::{ProbeKind, ProbeResult};
 use crate::process::ProcInfo;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -11,27 +11,28 @@ pub struct PortCard {
     pub pid: u32,
     pub command: String,
     pub url: String,
+    pub kind: ProbeKind,
+    pub reason: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
     pub project_root: Option<String>,
     pub project_name: Option<String>,
     pub cwd: Option<String>,
     pub cmdline: Option<String>,
-    pub status: u16,
+    pub status: Option<u16>,
 }
 
 impl PortCard {
     pub fn build(port: u16, pid: u32, command: String, proc: &ProcInfo, probe: &ProbeResult) -> Self {
-        let project_root = proc
-            .cwd
-            .as_deref()
-            .and_then(crate::project::detect_root);
+        let project_root = proc.cwd.as_deref().and_then(crate::project::detect_root);
         let project_name = project_root.as_deref().map(crate::project::folder_name);
         Self {
             port,
             pid,
             command,
             url: format!("http://localhost:{port}"),
+            kind: probe.kind,
+            reason: probe.reason.clone(),
             title: probe.title.clone(),
             description: probe.description.clone(),
             project_root,

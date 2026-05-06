@@ -1,5 +1,5 @@
 use crate::discovery::{Listener, PortEnumerator};
-use crate::probe::{ProbeResult, Prober};
+use crate::probe::Prober;
 use crate::process::{ProcInfo, ProcessInspector};
 use crate::state::{AppState, PortCard};
 use std::collections::{HashMap, HashSet};
@@ -7,15 +7,6 @@ use std::time::Duration;
 use tracing::{debug, warn};
 
 const SELF_PORT: u16 = 7777;
-const COMMAND_DENYLIST: &[&str] = &[
-    "mDNSResponder",
-    "rapportd",
-    "ControlCenter",
-    "sharingd",
-    "rapportd",
-    "remoted",
-    "identityservicesd",
-];
 
 pub struct Scheduler {
     enumerator: Box<dyn PortEnumerator>,
@@ -54,9 +45,8 @@ impl Scheduler {
         let filtered: Vec<Listener> = listeners
             .into_iter()
             .filter(|l| l.port > 1024 && l.port != SELF_PORT)
-            .filter(|l| !COMMAND_DENYLIST.iter().any(|d| l.command.eq_ignore_ascii_case(d)))
             .collect();
-        debug!("listeners after filter: {}", filtered.len());
+        debug!("listeners: {}", filtered.len());
 
         let live_keys: HashSet<CacheKey> = filtered.iter().map(|l| CacheKey {
             port: l.port, pid: l.pid, command: l.command.clone(),
@@ -71,10 +61,7 @@ impl Scheduler {
                 continue;
             }
             let proc: ProcInfo = if l.pid == 0 { ProcInfo::default() } else { self.inspector.inspect(l.pid) };
-            let probe: ProbeResult = match self.prober.probe(l.port).await {
-                Some(r) => r,
-                None => continue, // not HTTP — hide in v1
-            };
+            let probe = self.prober.probe(l.port).await;
             let card = PortCard::build(l.port, l.pid, l.command.clone(), &proc, &probe);
             self.cache.insert(key, card.clone());
             new_map.insert(l.port, card);
