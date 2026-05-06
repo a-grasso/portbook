@@ -1,11 +1,11 @@
 use crate::probe::{ProbeKind, ProbeResult};
 use crate::process::ProcInfo;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortCard {
     pub port: u16,
     pub pid: u32,
@@ -50,7 +50,7 @@ pub struct AppState {
     tx: broadcast::Sender<Snapshot>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub ports: Vec<PortCard>,
 }

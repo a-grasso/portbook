@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tracing::{debug, warn};
 
-const SELF_PORT: u16 = 7777;
+use crate::SELF_PORT;
 
 pub struct Scheduler {
     enumerator: Box<dyn PortEnumerator>,

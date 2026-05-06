@@ -110,3 +110,24 @@ function connect() {
 }
 
 connect();
+
+async function loadVersion() {
+  const el = document.getElementById("version");
+  if (!el) return;
+  try {
+    const res = await fetch("/api/version");
+    if (!res.ok) return;
+    const v = await res.json();
+    el.textContent = `v${v.current}`;
+    if (v.update_available && v.latest) {
+      const link = document.createElement("a");
+      link.href = "https://github.com/a-grasso/portbook/releases/latest";
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.className = "update";
+      link.textContent = `update available → v${v.latest}`;
+      el.after(link);
+    }
+  } catch (_) { /* silent */ }
+}
+loadVersion();

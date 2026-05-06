@@ -12,6 +12,7 @@ use portbook::build_app;
 use portbook::probe::{ProbeKind, ProbeResult};
 use portbook::process::ProcInfo;
 use portbook::state::{AppState, PortCard};
+use portbook::VersionState;
 use std::collections::HashMap;
 use std::time::Duration;
 use tower::ServiceExt;
@@ -34,7 +35,7 @@ const ATTACKER_HOSTS: &[&str] = &[
 ];
 
 async fn status_for(host: Option<&str>, path: &str) -> StatusCode {
-    let app = build_app(AppState::new());
+    let app = build_app(AppState::new(), VersionState::new());
     let mut b = Request::builder().uri(path);
     if let Some(h) = host {
         b = b.header(header::HOST, h);
@@ -149,7 +150,7 @@ fn assert_no_secrets(label: &str, body: &str) {
 #[tokio::test]
 async fn api_ports_never_emits_secret_values() {
     let state = state_with_planted_card(18080).await;
-    let app = build_app(state);
+    let app = build_app(state, VersionState::new());
     let req = Request::builder()
         .uri("/api/ports")
         .header(header::HOST, "127.0.0.1:7777")
@@ -164,7 +165,7 @@ async fn api_ports_never_emits_secret_values() {
 #[tokio::test]
 async fn api_stream_never_emits_secret_values() {
     let state = state_with_planted_card(18080).await;
-    let app = build_app(state);
+    let app = build_app(state, VersionState::new());
     let req = Request::builder()
         .uri("/api/stream")
         .header(header::HOST, "127.0.0.1:7777")

@@ -1,8 +1,8 @@
 use scraper::{Html, Selector};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProbeResult {
     pub kind: ProbeKind,
     pub status: Option<u16>,
@@ -11,7 +11,7 @@ pub struct ProbeResult {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ProbeKind {
     /// HTTP 2xx/3xx — live, browsable service.
