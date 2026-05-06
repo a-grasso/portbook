@@ -1,6 +1,6 @@
 use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use portbook::cli::{ColorChoice, LsOpts};
+use portbook::cli::{ColorChoice, LsOpts, WatchOpts};
 use portbook::{AppState, BIND_ADDR, VersionState, build_app, print_completions, scheduler::Scheduler, tracing_filter, version};
 use std::net::SocketAddr;
 use tracing::info;
@@ -23,11 +23,32 @@ enum Command {
     Serve,
     /// List discovered ports in the terminal.
     Ls(LsArgs),
+    /// Stream snapshots on an interval (good for piping to jq).
+    Watch(WatchArgs),
     /// Generate shell completion script (e.g. `portbook completions zsh`).
     Completions {
         /// Target shell.
         shell: Shell,
     },
+}
+
+#[derive(Args, Default)]
+struct WatchArgs {
+    /// Emit one JSON line per change (skips identical snapshots).
+    #[arg(long)]
+    json: bool,
+    /// Color output: auto (default), always, never. Ignored in --json mode.
+    #[arg(long, value_enum, default_value_t = CliColor::Auto)]
+    color: CliColor,
+    /// Polling interval in seconds (min 1).
+    #[arg(long, default_value_t = 3)]
+    interval: u64,
+}
+
+impl From<WatchArgs> for WatchOpts {
+    fn from(a: WatchArgs) -> Self {
+        WatchOpts { json: a.json, color: a.color.into(), interval_secs: a.interval }
+    }
 }
 
 #[derive(Args, Default)]
@@ -76,6 +97,7 @@ async fn main() -> anyhow::Result<()> {
     let cmd = cli.command.unwrap_or_else(default_command);
     match cmd {
         Command::Ls(args) => portbook::cli::run_ls(args.into()).await,
+        Command::Watch(args) => portbook::cli::run_watch(args.into()).await,
         Command::Serve => run_serve(cli.verbose).await,
         Command::Completions { shell } => {
             let mut cmd = Cli::command();

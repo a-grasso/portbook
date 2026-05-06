@@ -3,6 +3,7 @@
 
 mod render;
 mod style;
+mod watch;
 mod width;
 
 use crate::BIND_ADDR;
@@ -13,6 +14,7 @@ use style::Style;
 use width::term_width;
 
 pub use style::ColorChoice;
+pub use watch::{WatchOpts, run_watch};
 
 #[derive(Default, Debug, Clone, Copy)]
 pub struct LsOpts {
@@ -35,7 +37,7 @@ pub async fn run_ls(opts: LsOpts) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn fetch_from_daemon() -> Option<Snapshot> {
+pub(super) async fn fetch_from_daemon() -> Option<Snapshot> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(500))
         .build()
@@ -48,7 +50,7 @@ async fn fetch_from_daemon() -> Option<Snapshot> {
     resp.json::<Snapshot>().await.ok()
 }
 
-async fn one_shot_scan() -> anyhow::Result<Snapshot> {
+pub(super) async fn one_shot_scan() -> anyhow::Result<Snapshot> {
     let ports = Engine::new().scan_all().await?;
     Ok(Snapshot { ports })
 }
