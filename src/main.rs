@@ -1,12 +1,16 @@
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use portbook::cli::{ColorChoice, LsOpts};
-use portbook::{AppState, BIND_ADDR, VersionState, build_app, scheduler::Scheduler, version};
+use portbook::{AppState, BIND_ADDR, VersionState, build_app, scheduler::Scheduler, tracing_filter, version};
 use std::net::SocketAddr;
 use tracing::info;
 
 #[derive(Parser)]
 #[command(name = "portbook", version, about)]
 struct Cli {
+    /// Increase log verbosity (-v=debug, -vv=trace). Overrides RUST_LOG.
+    #[arg(short, long, action = ArgAction::Count, global = true)]
+    verbose: u8,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -65,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
     let cmd = cli.command.unwrap_or_else(default_command);
     match cmd {
         Command::Ls(args) => portbook::cli::run_ls(args.into()).await,
-        Command::Ui => run_ui().await,
+        Command::Ui => run_ui(cli.verbose).await,
     }
 }
 
@@ -76,13 +80,15 @@ fn default_command() -> Command {
     }
 }
 
-async fn run_ui() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "portbook=info,tower_http=warn".into()),
-        )
-        .init();
+async fn run_ui(verbosity: u8) -> anyhow::Result<()> {
+    // -v overrides RUST_LOG; otherwise honor the env var as before.
+    let filter = if verbosity > 0 {
+        tracing_subscriber::EnvFilter::new(tracing_filter(verbosity))
+    } else {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_filter(0).into())
+    };
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let state = AppState::new();
     let version_state = VersionState::new();

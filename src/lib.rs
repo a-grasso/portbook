@@ -39,6 +39,44 @@ pub async fn host_guard(req: Request, next: Next) -> Result<Response, StatusCode
     Ok(next.run(req).await)
 }
 
+/// Convert a `-v` count flag into a `tracing-subscriber` env-filter
+/// directive. 0 = info, 1 = debug, 2+ = trace.
+pub fn tracing_filter(verbosity: u8) -> &'static str {
+    match verbosity {
+        0 => "portbook=info,tower_http=warn",
+        1 => "portbook=debug,tower_http=info",
+        _ => "portbook=trace,tower_http=debug",
+    }
+}
+
+#[cfg(test)]
+mod verbosity_tests {
+    use super::tracing_filter;
+
+    #[test]
+    fn zero_means_info() {
+        assert!(tracing_filter(0).contains("portbook=info"));
+    }
+
+    #[test]
+    fn one_v_means_debug() {
+        assert!(tracing_filter(1).contains("portbook=debug"));
+    }
+
+    #[test]
+    fn two_or_more_means_trace() {
+        assert!(tracing_filter(2).contains("portbook=trace"));
+        assert!(tracing_filter(5).contains("portbook=trace"));
+    }
+
+    #[test]
+    fn higher_v_implies_louder_dependencies() {
+        // -vv should also lift our HTTP middleware to a chattier level
+        assert!(tracing_filter(0).contains("tower_http=warn"));
+        assert!(!tracing_filter(2).contains("tower_http=warn"));
+    }
+}
+
 pub fn build_app(state: AppState, version: VersionState) -> Router {
     let api = Router::new()
         .route("/api/ports", get(api::ports))
