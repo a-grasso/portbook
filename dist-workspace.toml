@@ -8,6 +8,10 @@ cargo-dist-version = "0.30.4"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = ["shell"]
+installers = ["shell", "homebrew"]
+# Homebrew tap to publish the formula to
+tap = "a-grasso/homebrew-tap"
+# The name of the tap-publish job uses HOMEBREW_TAP_TOKEN as the GH PAT
+publish-jobs = ["homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
