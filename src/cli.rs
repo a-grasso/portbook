@@ -174,7 +174,9 @@ fn print_card(c: &PortCard, glyph: char, s: &Style, width: usize, port_w: usize,
     }
 }
 
-// ─── Style helpers (ANSI, conditional) ───────────────────────────────
+// ─── Style helpers (anstyle-based, conditional) ──────────────────────
+
+use anstyle::{AnsiColor, Effects, Style as AStyle};
 
 #[derive(Default)]
 pub struct Style {
@@ -192,16 +194,45 @@ impl Style {
         Self { enabled: std::io::stdout().is_terminal() }
     }
 
-    fn wrap(&self, code: &str, s: &str) -> String {
-        if self.enabled { format!("\x1b[{}m{}\x1b[0m", code, s) } else { s.to_string() }
+    fn paint(&self, style: AStyle, s: &str) -> String {
+        if self.enabled {
+            format!("{style}{s}{style:#}")
+        } else {
+            s.to_string()
+        }
     }
-    pub fn bold(&self, s: &str) -> String { self.wrap("1", s) }
-    pub fn dim(&self, s: &str) -> String { self.wrap("2", s) }
-    pub fn green(&self, s: &str) -> String { self.wrap("32", s) }
-    pub fn amber(&self, s: &str) -> String { self.wrap("33", s) }
-    pub fn cyan(&self, s: &str) -> String { self.wrap("36", s) }
-    pub fn port(&self, s: &str) -> String { self.wrap("1;94", s) } // bold bright blue
-    pub fn url(&self, s: &str) -> String { self.wrap("4;34", s) }  // underlined blue
+
+    pub fn bold(&self, s: &str) -> String {
+        self.paint(AStyle::new().effects(Effects::BOLD), s)
+    }
+    pub fn dim(&self, s: &str) -> String {
+        self.paint(AStyle::new().effects(Effects::DIMMED), s)
+    }
+    pub fn green(&self, s: &str) -> String {
+        self.paint(AStyle::new().fg_color(Some(AnsiColor::Green.into())), s)
+    }
+    pub fn amber(&self, s: &str) -> String {
+        self.paint(AStyle::new().fg_color(Some(AnsiColor::Yellow.into())), s)
+    }
+    pub fn cyan(&self, s: &str) -> String {
+        self.paint(AStyle::new().fg_color(Some(AnsiColor::Cyan.into())), s)
+    }
+    pub fn port(&self, s: &str) -> String {
+        self.paint(
+            AStyle::new()
+                .fg_color(Some(AnsiColor::BrightBlue.into()))
+                .effects(Effects::BOLD),
+            s,
+        )
+    }
+    pub fn url(&self, s: &str) -> String {
+        self.paint(
+            AStyle::new()
+                .fg_color(Some(AnsiColor::Blue.into()))
+                .effects(Effects::UNDERLINE),
+            s,
+        )
+    }
 }
 
 // ─── Width helpers ───────────────────────────────────────────────────
