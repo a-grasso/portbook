@@ -34,6 +34,13 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = "127.0.0.1:7777".parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("portbook listening on http://{addr}");
+
+    if std::env::var_os("PORTBOOK_NO_OPEN").is_none() {
+        let url = format!("http://{addr}");
+        let cmd = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let _ = std::process::Command::new(cmd).arg(&url).spawn();
+    }
+
     axum::serve(listener, app).await?;
     Ok(())
 }
