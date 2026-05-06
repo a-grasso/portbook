@@ -25,6 +25,7 @@ anyhow = "1"
 futures = "0.3"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
+terminal_size = "0.4"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
