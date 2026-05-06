@@ -4,13 +4,21 @@ A local web dashboard that discovers, labels, and links every dev service runnin
 
 Runs on **http://localhost:7777**.
 
-## Build & Run
+## Install
+
+Prebuilt binaries (macOS + Linux, x86_64 + arm64) are published on each release:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/a-grasso/portbook/releases/latest/download/portbook-installer.sh | sh
+```
+
+Then run `portbook` and open http://localhost:7777.
+
+## Build from source
 
 ```sh
 cargo run --release
 ```
-
-Then open http://localhost:7777 in your browser.
 
 ## Platform support
 
