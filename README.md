@@ -4,9 +4,13 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](#platform-support)
 
-You've got six dev servers running on six random ports and no idea which is which. Portbook finds them, labels them, and gives you one page to click through.
+You've got six dev servers running on six random ports and no idea which is which. Portbook finds them, labels them, and gives you one page to click through — or one terminal command to list them.
 
-Runs on **http://localhost:7777**.
+```sh
+portbook            # web UI on http://localhost:7777
+portbook ls         # same data, in your terminal
+portbook watch --json | jq …   # streaming JSON for agents and scripts
+```
 
 ## Why
 
@@ -19,9 +23,14 @@ Runs on **http://localhost:7777**.
 - Auto-discovers HTTP servers on every non-standard localhost port
 - Labels each card with project name (detected from process `cwd` markers) and page title
 - Classifies ports as **live** / **error** / **dead** with visible reasons
-- Live updates via Server-Sent Events — no polling, no refresh
+- Three interchangeable surfaces over the same data:
+  - **Web UI** at `http://localhost:7777` with live updates via SSE
+  - **`portbook ls`** — grouped, colored terminal list (great for `tmux`)
+  - **`portbook watch [--json]`** — streaming snapshots for agents and scripts
+- Stable JSON schema (`/api/ports`, `ls --json`, `watch --json`) — same shape everywhere
+- Cmdline secret redaction at the API boundary (tokens, passwords, URLs with userinfo)
+- Shell completions for bash / zsh / fish / elvish / powershell
 - Single static binary, ~5 MB, no runtime dependencies beyond `lsof` (macOS) or `ss` (Linux)
-- Tabbed UI: focus on **Live** services, or see the full inventory under **All**
 
 ## Install
 
@@ -120,5 +129,7 @@ macOS and Linux (x86_64 and arm64). Requires `lsof` (macOS) or `ss` (Linux) on `
 ## Build from source
 
 ```sh
-cargo run --release
+cargo install --path .       # installs the `portbook` binary into ~/.cargo/bin
+# or, just to try it without installing:
+cargo run --release -- ls
 ```
