@@ -6,6 +6,8 @@
   --muted: #8a92a6;
   --accent: #7aa2ff;
   --border: #262b3a;
+  --warn: #f5a524;
+  --bad: #f87171;
 }
 
 * { box-sizing: border-box; }
@@ -21,8 +23,8 @@ html, body {
 header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 18px 28px;
+  gap: 14px;
+  padding: 14px 28px;
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
@@ -45,12 +47,35 @@ header h1 {
   transition: background 0.2s ease;
 }
 .dot.live { background: #4ade80; box-shadow: 0 0 8px #4ade8055; }
-.dot.dead { background: #f87171; }
+.dot.dead { background: var(--bad); }
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+.tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 5px 12px;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.tab:hover { color: var(--fg); border-color: var(--accent); }
+.tab.active {
+  background: var(--panel-2);
+  color: var(--fg);
+  border-color: var(--accent);
+}
 
 #count {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   margin-left: auto;
+  font-size: 12px;
 }
 
 main {
@@ -73,10 +98,18 @@ main {
   transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
   animation: fade-in 0.2s ease;
 }
-.card:hover {
+.card.kind-live:hover {
   border-color: var(--accent);
   background: var(--panel-2);
   transform: translateY(-1px);
+  cursor: pointer;
+}
+.card.kind-error, .card.kind-dead {
+  opacity: 0.6;
+  cursor: default;
+}
+.card.kind-error:hover, .card.kind-dead:hover {
+  opacity: 0.85;
 }
 
 .card-head {
@@ -92,12 +125,24 @@ main {
   font-weight: 600;
 }
 
+.kind-badge {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.badge-error { background: rgba(245,165,36,0.15); color: var(--warn); border: 1px solid rgba(245,165,36,0.35); }
+.badge-dead  { background: rgba(248,113,113,0.12); color: var(--bad); border: 1px solid rgba(248,113,113,0.3); }
+
 .project {
   color: var(--muted);
   background: var(--panel-2);
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid var(--border);
+  margin-left: auto;
 }
 .project:empty { display: none; }
 

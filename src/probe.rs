@@ -2,11 +2,24 @@ use scraper::{Html, Selector};
 use serde::Serialize;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProbeResult {
+    pub kind: ProbeKind,
+    pub status: Option<u16>,
     pub title: Option<String>,
     pub description: Option<String>,
-    pub status: u16,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProbeKind {
+    /// HTTP 2xx/3xx — live, browsable service.
+    Live,
+    /// HTTP 4xx/5xx — speaks HTTP but doesn't serve a useful page at /.
+    Error,
+    /// Did not respond as HTTP — connection refused, timeout, non-HTTP protocol.
+    Dead,
 }
 
 pub struct Prober {
@@ -24,17 +37,44 @@ impl Prober {
         Self { client }
     }
 
-    /// Returns Some(result) if the port speaks HTTP and responds, else None.
-    pub async fn probe(&self, port: u16) -> Option<ProbeResult> {
+    pub async fn probe(&self, port: u16) -> ProbeResult {
         let url = format!("http://127.0.0.1:{port}/");
-        let resp = self.client.get(&url).send().await.ok()?;
+        let resp = match self.client.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                return ProbeResult {
+                    kind: ProbeKind::Dead,
+                    status: None,
+                    title: None,
+                    description: None,
+                    reason: Some(short_err(&e)),
+                };
+            }
+        };
         let status = resp.status().as_u16();
-        let bytes = resp.bytes().await.ok()?;
-        let take = bytes.len().min(64 * 1024);
-        let html = String::from_utf8_lossy(&bytes[..take]);
+        let body = resp.bytes().await.unwrap_or_default();
+        let take = body.len().min(64 * 1024);
+        let html = String::from_utf8_lossy(&body[..take]);
         let (title, description) = extract(&html);
-        Some(ProbeResult { title, description, status })
+        let kind = if (200..400).contains(&status) {
+            ProbeKind::Live
+        } else {
+            ProbeKind::Error
+        };
+        let reason = if kind == ProbeKind::Error {
+            Some(format!("HTTP {status}"))
+        } else {
+            None
+        };
+        ProbeResult { kind, status: Some(status), title, description, reason }
     }
+}
+
+fn short_err(e: &reqwest::Error) -> String {
+    if e.is_timeout() { return "timeout".into(); }
+    if e.is_connect() { return "connection refused".into(); }
+    if e.is_decode() || e.is_body() { return "non-HTTP response".into(); }
+    "not HTTP".into()
 }
 
 fn extract(html: &str) -> (Option<String>, Option<String>) {
@@ -59,3 +99,4 @@ fn extract(html: &str) -> (Option<String>, Option<String>) {
 fn clean(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
+
