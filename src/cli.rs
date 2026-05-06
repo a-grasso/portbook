@@ -12,11 +12,13 @@ use render::render;
 use style::Style;
 use width::term_width;
 
+pub use style::ColorChoice;
+
 #[derive(Default, Debug, Clone, Copy)]
 pub struct LsOpts {
     pub all: bool,
     pub live: bool,
-    pub no_color: bool,
+    pub color: ColorChoice,
     pub json: bool,
 }
 
@@ -25,7 +27,7 @@ pub async fn run_ls(opts: LsOpts) -> anyhow::Result<()> {
         Some(s) => s,
         None => one_shot_scan().await?,
     };
-    let style = Style::resolve(opts.no_color);
+    let style = Style::resolve(opts.color);
     let width = term_width();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();

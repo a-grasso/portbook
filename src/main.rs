@@ -1,5 +1,5 @@
-use clap::{Args, Parser, Subcommand};
-use portbook::cli::LsOpts;
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use portbook::cli::{ColorChoice, LsOpts};
 use portbook::{AppState, BIND_ADDR, VersionState, build_app, scheduler::Scheduler, version};
 use std::net::SocketAddr;
 use tracing::info;
@@ -27,17 +27,35 @@ struct LsArgs {
     /// Show only live ports.
     #[arg(long, conflicts_with = "all")]
     live: bool,
-    /// Disable ANSI colors (auto-disabled when stdout isn't a tty).
-    #[arg(long)]
-    no_color: bool,
+    /// Color output: auto (default, on when stdout is a tty), always, never.
+    #[arg(long, value_enum, default_value_t = CliColor::Auto)]
+    color: CliColor,
     /// Emit a single JSON line (machine-readable, no colors).
     #[arg(long)]
     json: bool,
 }
 
+#[derive(Default, Debug, Clone, Copy, ValueEnum)]
+enum CliColor {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl From<CliColor> for ColorChoice {
+    fn from(c: CliColor) -> Self {
+        match c {
+            CliColor::Auto => ColorChoice::Auto,
+            CliColor::Always => ColorChoice::Always,
+            CliColor::Never => ColorChoice::Never,
+        }
+    }
+}
+
 impl From<LsArgs> for LsOpts {
     fn from(a: LsArgs) -> Self {
-        LsOpts { all: a.all, live: a.live, no_color: a.no_color, json: a.json }
+        LsOpts { all: a.all, live: a.live, color: a.color.into(), json: a.json }
     }
 }
 
