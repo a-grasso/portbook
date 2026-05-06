@@ -1,6 +1,7 @@
 pub mod api;
 pub mod cli;
 pub mod discovery;
+pub mod engine;
 pub mod probe;
 pub mod process;
 pub mod project;
