@@ -1,33 +1,36 @@
-use crate::discovery::{Listener, PortEnumerator};
-use crate::probe::Prober;
-use crate::process::{ProcInfo, ProcessInspector};
+//! Periodic polling layer over `Engine`. Adds inter-cycle caching and
+//! state broadcast. Knows nothing about discovery / probing internals —
+//! see `ARCHITECTURE.md`.
+
+use crate::discovery::Listener;
+use crate::engine::Engine;
 use crate::state::{AppState, PortCard};
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
-use tracing::{debug, warn};
-
-use crate::SELF_PORT;
+use std::time::{Duration, Instant};
+use tracing::{info, warn};
 
 pub struct Scheduler {
-    enumerator: Box<dyn PortEnumerator>,
-    inspector: Box<dyn ProcessInspector>,
-    prober: Prober,
+    engine: Engine,
     state: AppState,
     cache: HashMap<CacheKey, PortCard>,
 }
 
 #[derive(Eq, PartialEq, Hash, Clone)]
-struct CacheKey { port: u16, pid: u32, command: String }
+struct CacheKey {
+    port: u16,
+    pid: u32,
+    command: String,
+}
+
+impl CacheKey {
+    fn from(l: &Listener) -> Self {
+        Self { port: l.port, pid: l.pid, command: l.command.clone() }
+    }
+}
 
 impl Scheduler {
     pub fn new(state: AppState) -> Self {
-        Self {
-            enumerator: crate::discovery::default(),
-            inspector: crate::process::default(),
-            prober: Prober::new(),
-            state,
-            cache: HashMap::new(),
-        }
+        Self { engine: Engine::new(), state, cache: HashMap::new() }
     }
 
     pub async fn run(mut self) {
@@ -41,33 +44,42 @@ impl Scheduler {
     }
 
     async fn cycle(&mut self) -> anyhow::Result<()> {
-        let listeners = self.enumerator.list()?;
-        let filtered: Vec<Listener> = listeners
-            .into_iter()
-            .filter(|l| l.port > 1024 && l.port != SELF_PORT)
-            .collect();
-        debug!("listeners: {}", filtered.len());
+        let cycle_start = Instant::now();
+        let listeners = self.engine.enumerate()?;
 
-        let live_keys: HashSet<CacheKey> = filtered.iter().map(|l| CacheKey {
-            port: l.port, pid: l.pid, command: l.command.clone(),
-        }).collect();
+        // Drop cache entries for listeners that vanished.
+        let live_keys: HashSet<CacheKey> = listeners.iter().map(CacheKey::from).collect();
         self.cache.retain(|k, _| live_keys.contains(k));
 
+        // Split into cached (instant) and to-probe (delegated to Engine).
         let mut new_map: HashMap<u16, PortCard> = HashMap::new();
-        for l in filtered {
-            let key = CacheKey { port: l.port, pid: l.pid, command: l.command.clone() };
+        let mut to_probe: Vec<Listener> = Vec::new();
+        for l in listeners {
+            let key = CacheKey::from(&l);
             if let Some(card) = self.cache.get(&key) {
                 new_map.insert(l.port, card.clone());
-                continue;
+            } else {
+                to_probe.push(l);
             }
-            let proc: ProcInfo = if l.pid == 0 { ProcInfo::default() } else { self.inspector.inspect(l.pid) };
-            let probe = self.prober.probe(l.port).await;
-            let card = PortCard::build(l.port, l.pid, l.command.clone(), &proc, &probe);
-            self.cache.insert(key, card.clone());
-            new_map.insert(l.port, card);
+        }
+        let new_count = to_probe.len();
+        let cached_count = new_map.len();
+
+        for card in self.engine.scan(to_probe).await {
+            self.cache
+                .insert(CacheKey { port: card.port, pid: card.pid, command: card.command.clone() }, card.clone());
+            new_map.insert(card.port, card);
         }
 
         self.state.replace(new_map).await;
+        if new_count > 0 {
+            info!(
+                "scheduler cycle: {} new + {} cached in {:?}",
+                new_count,
+                cached_count,
+                cycle_start.elapsed()
+            );
+        }
         Ok(())
     }
 }
