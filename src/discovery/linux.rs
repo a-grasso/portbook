@@ -44,3 +44,50 @@ fn parse_ss(text: &str) -> Vec<Listener> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_listener_with_process_info() {
+        let line = "LISTEN 0 128 127.0.0.1:7777 0.0.0.0:* users:((\"portbook\",pid=4242,fd=6))";
+        let out = parse_ss(line);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].port, 7777);
+        assert_eq!(out[0].pid, 4242);
+        assert_eq!(out[0].command, "portbook");
+    }
+
+    #[test]
+    fn parses_listener_without_process_info() {
+        // No -p access: process column missing, but we still surface the port.
+        let line = "LISTEN 0 128 127.0.0.1:5432 0.0.0.0:*";
+        let out = parse_ss(line);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].port, 5432);
+        assert_eq!(out[0].pid, 0);
+        assert!(out[0].command.is_empty());
+    }
+
+    #[test]
+    fn skips_non_loopback_binds() {
+        let line = "LISTEN 0 128 192.168.1.5:8080 0.0.0.0:* users:((\"nginx\",pid=1,fd=6))";
+        assert!(parse_ss(line).is_empty());
+    }
+
+    #[test]
+    fn accepts_wildcard_and_v6() {
+        let text = "LISTEN 0 128 0.0.0.0:3000 0.0.0.0:*\n\
+                    LISTEN 0 128 [::]:8000 [::]:*\n\
+                    LISTEN 0 128 [::1]:9000 [::]:*";
+        let ports: Vec<u16> = parse_ss(text).into_iter().map(|l| l.port).collect();
+        assert_eq!(ports, vec![3000, 8000, 9000]);
+    }
+
+    #[test]
+    fn ignores_short_lines() {
+        assert!(parse_ss("").is_empty());
+        assert!(parse_ss("State Recv-Q Send-Q\n").is_empty());
+    }
+}
