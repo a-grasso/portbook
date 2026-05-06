@@ -17,8 +17,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run the web UI server (default).
-    Ui,
+    /// Run the daemon: web UI + JSON API on http://127.0.0.1:7777 (default).
+    #[command(alias = "ui")]
+    Serve,
     /// List discovered ports in the terminal.
     Ls(LsArgs),
 }
@@ -69,18 +70,18 @@ async fn main() -> anyhow::Result<()> {
     let cmd = cli.command.unwrap_or_else(default_command);
     match cmd {
         Command::Ls(args) => portbook::cli::run_ls(args.into()).await,
-        Command::Ui => run_ui(cli.verbose).await,
+        Command::Serve => run_serve(cli.verbose).await,
     }
 }
 
 fn default_command() -> Command {
     match std::env::var("PORTBOOK_DEFAULT").as_deref() {
         Ok("ls") => Command::Ls(LsArgs::default()),
-        _ => Command::Ui,
+        _ => Command::Serve,
     }
 }
 
-async fn run_ui(verbosity: u8) -> anyhow::Result<()> {
+async fn run_serve(verbosity: u8) -> anyhow::Result<()> {
     // -v overrides RUST_LOG; otherwise honor the env var as before.
     let filter = if verbosity > 0 {
         tracing_subscriber::EnvFilter::new(tracing_filter(verbosity))
