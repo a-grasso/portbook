@@ -24,22 +24,32 @@ fn parse_ss(text: &str) -> Vec<Listener> {
         let host = local.rsplit_once(':').map(|(h, _)| h).unwrap_or("");
         let is_local = matches!(host, "*" | "0.0.0.0" | "127.0.0.1" | "[::]" | "[::1]");
         if !is_local { continue; }
-        // Process column may not be present without root; try to extract.
+        // `ss -p` only fills the process column for sockets the caller can
+        // see — own-user as non-root, all sockets as root. Treat missing
+        // process info as evidence that the socket belongs to a *different*
+        // user and skip it. This mirrors the $USER filter we apply on macOS
+        // and prevents leaking other users' listeners on shared dev hosts.
+        // Caveat: running portbook as root will surface every user's
+        // sockets, same as macOS would under root.
+        let Some(proc) = fields.get(5) else { continue };
+
         let mut pid: u32 = 0;
         let mut command = String::new();
-        if let Some(proc) = fields.get(5) {
-            // users:(("nginx",pid=1234,fd=6))
-            if let Some(start) = proc.find("\"") {
-                if let Some(end) = proc[start + 1..].find("\"") {
-                    command = proc[start + 1..start + 1 + end].to_string();
-                }
-            }
-            if let Some(idx) = proc.find("pid=") {
-                let rest = &proc[idx + 4..];
-                let n: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-                pid = n.parse().unwrap_or(0);
+        // users:(("nginx",pid=1234,fd=6))
+        if let Some(start) = proc.find('"') {
+            if let Some(end) = proc[start + 1..].find('"') {
+                command = proc[start + 1..start + 1 + end].to_string();
             }
         }
+        if let Some(idx) = proc.find("pid=") {
+            let rest = &proc[idx + 4..];
+            let n: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            pid = n.parse().unwrap_or(0);
+        }
+        // Defence in depth: ss occasionally emits process columns with
+        // pid=0 for kernel-owned listeners. Don't surface those.
+        if pid == 0 { continue; }
+
         out.push(Listener { port, pid, command });
     }
     out
@@ -60,14 +70,20 @@ mod tests {
     }
 
     #[test]
-    fn parses_listener_without_process_info() {
-        // No -p access: process column missing, but we still surface the port.
+    fn drops_listener_without_process_info() {
+        // Privacy boundary: ss only fills the process column for sockets the
+        // current user can see, so a missing process column means the socket
+        // belongs to *another* user — we must not surface it.
         let line = "LISTEN 0 128 127.0.0.1:5432 0.0.0.0:*";
-        let out = parse_ss(line);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].port, 5432);
-        assert_eq!(out[0].pid, 0);
-        assert!(out[0].command.is_empty());
+        assert!(parse_ss(line).is_empty());
+    }
+
+    #[test]
+    fn drops_listener_with_zero_pid() {
+        // Some ss versions emit a process column with pid=0 for kernel-owned
+        // listeners. They aren't user-owned services and shouldn't appear.
+        let line = "LISTEN 0 128 127.0.0.1:1234 0.0.0.0:* users:((\"?\",pid=0,fd=0))";
+        assert!(parse_ss(line).is_empty());
     }
 
     #[test]
@@ -78,9 +94,9 @@ mod tests {
 
     #[test]
     fn accepts_wildcard_and_v6() {
-        let text = "LISTEN 0 128 0.0.0.0:3000 0.0.0.0:*\n\
-                    LISTEN 0 128 [::]:8000 [::]:*\n\
-                    LISTEN 0 128 [::1]:9000 [::]:*";
+        let text = "LISTEN 0 128 0.0.0.0:3000 0.0.0.0:* users:((\"a\",pid=1,fd=6))\n\
+                    LISTEN 0 128 [::]:8000 [::]:* users:((\"b\",pid=2,fd=6))\n\
+                    LISTEN 0 128 [::1]:9000 [::]:* users:((\"c\",pid=3,fd=6))";
         let ports: Vec<u16> = parse_ss(text).into_iter().map(|l| l.port).collect();
         assert_eq!(ports, vec![3000, 8000, 9000]);
     }
