@@ -3,18 +3,24 @@
 //! see `ARCHITECTURE.md`.
 
 use crate::discovery::Listener;
-use crate::engine::Engine;
-use crate::process::ProcInfo;
+use crate::engine::{CycleCache, CycleEvent, Engine};
 use crate::state::{AppState, PortCard};
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use std::time::Duration;
+use tracing::info;
 
 pub struct Scheduler {
     engine: Engine,
     state: AppState,
-    cache: HashMap<CacheKey, PortCard>,
+    cache: SchedulerCache,
+}
+
+/// PID-and-command-keyed cache. A reload that changes PID forces a
+/// re-probe (correctness over noise) — see [`CacheKey`].
+#[derive(Default)]
+struct SchedulerCache {
+    inner: HashMap<CacheKey, PortCard>,
 }
 
 #[derive(Eq, PartialEq, Hash, Clone)]
@@ -30,85 +36,69 @@ impl CacheKey {
     }
 }
 
+impl CycleCache for SchedulerCache {
+    fn lookup(&self, l: &Listener) -> Option<PortCard> {
+        self.inner.get(&CacheKey::from(l)).cloned()
+    }
+
+    fn insert(&mut self, card: &PortCard) {
+        let key = CacheKey {
+            port: card.port,
+            pid: card.pid,
+            command: card.command.clone(),
+        };
+        self.inner.insert(key, card.clone());
+    }
+
+    fn retain_present(&mut self, listeners: &[Listener]) {
+        let live: HashSet<CacheKey> = listeners.iter().map(CacheKey::from).collect();
+        self.inner.retain(|k, _| live.contains(k));
+    }
+}
+
 impl Scheduler {
     pub fn new(state: AppState) -> Self {
-        Self { engine: Engine::new(), state, cache: HashMap::new() }
+        Self {
+            engine: Engine::new(),
+            state,
+            cache: SchedulerCache::default(),
+        }
     }
 
     pub async fn run(mut self) {
         let mut tick = tokio::time::interval(Duration::from_secs(3));
         loop {
             tick.tick().await;
-            if let Err(e) = self.cycle().await {
-                warn!("scheduler cycle error: {e:#}");
-            }
+            self.cycle().await;
         }
     }
 
-    async fn cycle(&mut self) -> anyhow::Result<()> {
-        let cycle_start = Instant::now();
-        let pairs = self.engine.enumerate_with_procs()?;
-
-        // Drop cache entries for listeners that vanished.
-        let live_keys: HashSet<CacheKey> =
-            pairs.iter().map(|(l, _)| CacheKey::from(l)).collect();
-        self.cache.retain(|k, _| live_keys.contains(k));
-
-        // Build the working map: cached cards land immediately; uncached
-        // ports get a pending placeholder until their probe streams in.
-        let mut new_map: HashMap<u16, PortCard> = HashMap::new();
-        let mut to_probe: Vec<(Listener, ProcInfo)> = Vec::new();
-        for (l, proc) in pairs {
-            let key = CacheKey::from(&l);
-            if let Some(card) = self.cache.get(&key) {
-                new_map.insert(l.port, card.clone());
-            } else {
-                new_map.insert(
-                    l.port,
-                    PortCard::pending(l.port, l.pid, l.command.clone(), &proc),
-                );
-                to_probe.push((l, proc));
+    async fn cycle(&mut self) {
+        let mut new_count: usize = 0;
+        let mut total: usize = 0;
+        let mut events = std::pin::pin!(self.engine.run_cycle(&mut self.cache));
+        while let Some(event) = events.next().await {
+            match event {
+                CycleEvent::Skeleton(map) => {
+                    new_count = map.values().filter(|c| c.is_pending()).count();
+                    total = map.len();
+                    self.state.replace_skeleton(map).await;
+                }
+                CycleEvent::Resolved(card) => {
+                    self.state.update_one(*card).await;
+                }
+                CycleEvent::Done { elapsed_ms } => {
+                    self.state.mark_done(elapsed_ms).await;
+                    if new_count > 0 {
+                        info!(
+                            "scheduler cycle: {} new + {} cached in {}ms",
+                            new_count,
+                            total.saturating_sub(new_count),
+                            elapsed_ms
+                        );
+                    }
+                }
             }
         }
-        let new_count = to_probe.len();
-        let cached_count = new_map.len() - new_count;
-
-        // Phase 1: skeleton with cached rows + pending placeholders.
-        if new_count > 0 {
-            self.state.replace_skeleton(new_map.clone()).await;
-        }
-
-        // Phase 2: stream probe results, broadcasting after each
-        // resolution so consumers see cards fill in piece-by-piece
-        // rather than waiting for the slowest probe to finish.
-        let mut stream = std::pin::pin!(self.engine.scan_streaming_with_procs(to_probe));
-        while let Some(card) = stream.next().await {
-            self.cache.insert(
-                CacheKey {
-                    port: card.port,
-                    pid: card.pid,
-                    command: card.command.clone(),
-                },
-                card.clone(),
-            );
-            new_map.insert(card.port, card);
-            // Still skeleton-state until ALL probes finish — final
-            // emit below carries scan_elapsed_ms.
-            self.state.replace_skeleton(new_map.clone()).await;
-        }
-
-        // Phase 3: final emit with cycle timing so consumers can tell
-        // "this is the resolved view" from the streaming intermediates.
-        let elapsed_ms = cycle_start.elapsed().as_millis().min(u32::MAX as u128) as u32;
-        self.state.replace(new_map, Some(elapsed_ms)).await;
-        if new_count > 0 {
-            info!(
-                "scheduler cycle: {} new + {} cached in {:?}",
-                new_count,
-                cached_count,
-                cycle_start.elapsed()
-            );
-        }
-        Ok(())
     }
 }
