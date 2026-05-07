@@ -82,7 +82,13 @@ impl Scheduler {
                 CycleEvent::Skeleton(map) => {
                     new_count = map.values().filter(|c| c.is_pending()).count();
                     total = map.len();
-                    self.state.replace_skeleton(map).await;
+                    // Only broadcast a skeleton frame when there's at
+                    // least one pending card — otherwise an all-cached
+                    // cycle would briefly clear scan_elapsed_ms and
+                    // make the UI flicker "probing…".
+                    if new_count > 0 {
+                        self.state.replace_skeleton(map).await;
+                    }
                 }
                 CycleEvent::Resolved(card) => {
                     self.state.update_one(*card).await;
