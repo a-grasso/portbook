@@ -5,10 +5,12 @@
 //! Either way, snapshots flow into the TUI through one mpsc channel.
 
 use crate::BIND_ADDR;
-use crate::engine::Engine;
+use crate::discovery::Listener;
+use crate::engine::{CycleCache, CycleEvent, Engine};
 use crate::state::{PortCard, Snapshot};
 use futures::StreamExt;
-use std::time::{Duration, Instant};
+use std::collections::HashMap;
+use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
@@ -85,98 +87,85 @@ async fn try_sse(tx: Sender<Snapshot>) -> bool {
 
 async fn poll_loop(tx: Sender<Snapshot>) {
     let engine = Engine::new();
-    // `last_complete` holds the previous cycle's resolved cards so
-    // re-probes on subsequent cycles render the prior view (live/error/
-    // dead, complete with title and probe metadata) instead of flashing
-    // back to "probing…" every 3 seconds. Only first-time-seen ports
-    // ever appear as pending placeholders.
-    let mut last_complete: std::collections::HashMap<u16, PortCard> =
-        std::collections::HashMap::new();
+    let mut cache = TuiCache::default();
 
-    if scan_cycle(&engine, &tx, &mut last_complete, true).await.is_err() {
+    if run_one_cycle(&engine, &tx, &mut cache, true).await == CycleOutcome::ChannelClosed {
         return;
     }
     let mut ticker = tokio::time::interval(POLL_INTERVAL);
     ticker.tick().await; // discard immediate first tick
     loop {
         ticker.tick().await;
-        if scan_cycle(&engine, &tx, &mut last_complete, false)
-            .await
-            .is_err()
-        {
+        if run_one_cycle(&engine, &tx, &mut cache, false).await == CycleOutcome::ChannelClosed {
             break;
         }
     }
 }
 
-/// One scan cycle. Emits a skeleton snapshot (only when uncached ports
-/// exist — typically just first-paint or when a brand-new listener
-/// appears), an incremental snapshot per probe completion, then a
-/// final snapshot carrying `scan_elapsed_ms` so the TUI footer can
-/// stop saying "probing…".
-///
-/// On cycles after the first, known ports show their last resolved
-/// state during re-probe — only newly-discovered ports render as
-/// pending. This matches the daemon's caching behavior.
-async fn scan_cycle(
-    engine: &Engine,
-    tx: &Sender<Snapshot>,
-    last_complete: &mut std::collections::HashMap<u16, PortCard>,
-    with_skeleton: bool,
-) -> Result<(), ()> {
-    let start = Instant::now();
-    let pairs = match engine.enumerate_with_procs() {
-        Ok(p) => p,
-        Err(_) => return Ok(()),
-    };
-
-    // Seed the working map: known ports inherit their last resolved
-    // result; unknown ports get a pending placeholder.
-    let mut map: std::collections::HashMap<u16, PortCard> = pairs
-        .iter()
-        .map(|(l, proc)| {
-            let card = match last_complete.get(&l.port) {
-                Some(prev) => prev.clone(),
-                None => PortCard::pending(l.port, l.pid, l.command.clone(), proc),
-            };
-            (l.port, card)
-        })
-        .collect();
-
-    let any_pending = map.values().any(|c| c.is_pending());
-    if with_skeleton && any_pending {
-        let snap = build_snap(&map, None);
-        if tx.send(snap).await.is_err() {
-            return Err(());
-        }
-    }
-
-    // Stream probe results, broadcasting after each.
-    let mut stream = std::pin::pin!(engine.scan_streaming_with_procs(pairs));
-    while let Some(card) = stream.next().await {
-        map.insert(card.port, card);
-        // Intermediate snapshots stay skeleton-flagged (no timing) so
-        // the TUI footer keeps saying "probing…" until the cycle ends.
-        if tx.send(build_snap(&map, None)).await.is_err() {
-            return Err(());
-        }
-    }
-
-    // Remember the resolved cards for the next cycle. Vanished ports
-    // are naturally forgotten because we rebuild fresh from `pairs`.
-    *last_complete = map.clone();
-
-    let elapsed_ms = start.elapsed().as_millis().min(u32::MAX as u128) as u32;
-    if tx.send(build_snap(&map, Some(elapsed_ms))).await.is_err() {
-        return Err(());
-    }
-    Ok(())
+#[derive(Eq, PartialEq)]
+enum CycleOutcome {
+    Continue,
+    ChannelClosed,
 }
 
-fn build_snap(
-    map: &std::collections::HashMap<u16, PortCard>,
-    scan_elapsed_ms: Option<u32>,
-) -> Snapshot {
+/// Port-only cache. Re-probes on subsequent cycles inherit the prior
+/// resolved card so the TUI doesn't flash back to "probing…" every
+/// 3 seconds. Vanished ports are dropped via `retain_present`.
+#[derive(Default)]
+struct TuiCache {
+    inner: HashMap<u16, PortCard>,
+}
+
+impl CycleCache for TuiCache {
+    fn lookup(&self, l: &Listener) -> Option<PortCard> {
+        self.inner.get(&l.port).cloned()
+    }
+    fn insert(&mut self, card: &PortCard) {
+        self.inner.insert(card.port, card.clone());
+    }
+    fn retain_present(&mut self, listeners: &[Listener]) {
+        let live: std::collections::HashSet<u16> = listeners.iter().map(|l| l.port).collect();
+        self.inner.retain(|p, _| live.contains(p));
+    }
+}
+
+/// One scan cycle, sending snapshots into `tx`. The first call emits
+/// a skeleton frame for new ports; subsequent cycles do not (anti-
+/// flicker — known ports keep their last resolved state during the
+/// re-probe).
+async fn run_one_cycle(
+    engine: &Engine,
+    tx: &Sender<Snapshot>,
+    cache: &mut TuiCache,
+    with_skeleton: bool,
+) -> CycleOutcome {
+    let mut map: HashMap<u16, PortCard> = HashMap::new();
+    let mut events = std::pin::pin!(engine.run_cycle(cache));
+    while let Some(event) = events.next().await {
+        match event {
+            CycleEvent::Skeleton(skel) => {
+                map = skel;
+                if with_skeleton && tx.send(build_snap(&map, None)).await.is_err() {
+                    return CycleOutcome::ChannelClosed;
+                }
+            }
+            CycleEvent::Resolved(card) => {
+                map.insert(card.port, *card);
+                if tx.send(build_snap(&map, None)).await.is_err() {
+                    return CycleOutcome::ChannelClosed;
+                }
+            }
+            CycleEvent::Done { elapsed_ms } => {
+                if tx.send(build_snap(&map, Some(elapsed_ms))).await.is_err() {
+                    return CycleOutcome::ChannelClosed;
+                }
+            }
+        }
+    }
+    CycleOutcome::Continue
+}
+
+fn build_snap(map: &HashMap<u16, PortCard>, scan_elapsed_ms: Option<u32>) -> Snapshot {
     let mut ports: Vec<PortCard> = map.values().cloned().collect();
     ports.sort_by_key(|c| c.port);
     Snapshot { ports, scan_elapsed_ms }

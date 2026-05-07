@@ -169,6 +169,33 @@ impl AppState {
         self.replace(skeleton, None).await;
     }
 
+    /// Insert or replace a single card and broadcast the resulting
+    /// snapshot. Keeps `scan_elapsed_ms = None` (skeleton state); the
+    /// caller marks the cycle done with [`AppState::mark_done`].
+    ///
+    /// Used by the scheduler's per-probe streaming path to avoid
+    /// cloning the entire port map on every probe completion.
+    pub async fn update_one(&self, card: PortCard) {
+        {
+            let mut w = self.inner.write().await;
+            w.cards.insert(card.port, card);
+            w.scan_elapsed_ms = None;
+        }
+        let snap = self.snapshot().await;
+        let _ = self.tx.send(snap);
+    }
+
+    /// Stamp the current state as a resolved cycle and broadcast.
+    /// Called once per cycle after all per-probe `update_one` calls.
+    pub async fn mark_done(&self, elapsed_ms: u32) {
+        {
+            let mut w = self.inner.write().await;
+            w.scan_elapsed_ms = Some(elapsed_ms);
+        }
+        let snap = self.snapshot().await;
+        let _ = self.tx.send(snap);
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<Snapshot> {
         self.tx.subscribe()
     }
