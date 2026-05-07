@@ -13,6 +13,12 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 
+/// Defensive cap on the SSE accumulation buffer. Local daemon traffic
+/// is trusted, but a malformed event with no `\n\n` boundary would
+/// otherwise grow the buffer without bound. 1 MiB comfortably exceeds
+/// any realistic snapshot payload (port count × ~1 KiB/card).
+const SSE_BUF_CAP: usize = 1 << 20;
+
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
 
 /// Cheap "is the daemon up?" check used to label the source in the
@@ -57,32 +63,85 @@ async fn try_sse(tx: Sender<Snapshot>) -> bool {
 
     tokio::spawn(async move {
         let mut stream = resp.bytes_stream();
-        let mut buf = String::new();
+        let mut parser = SseBuf::default();
         while let Some(chunk) = stream.next().await {
             let bytes = match chunk {
                 Ok(b) => b,
                 Err(_) => break,
             };
-            buf.push_str(&String::from_utf8_lossy(&bytes));
-            // SSE event boundary is a blank line. Each event is one or
-            // more `data:` lines; we only care about the JSON payload.
-            while let Some(idx) = buf.find("\n\n") {
-                let event: String = buf.drain(..idx + 2).collect();
-                for line in event.lines() {
-                    let json = match line.strip_prefix("data:") {
-                        Some(j) => j.trim(),
-                        None => continue,
-                    };
-                    if let Ok(snap) = serde_json::from_str::<Snapshot>(json)
-                        && tx.send(snap).await.is_err()
-                    {
-                        return;
-                    }
+            for snap in parser.feed(&bytes) {
+                if tx.send(snap).await.is_err() {
+                    return;
                 }
             }
         }
     });
     true
+}
+
+/// Pure SSE accumulator/parser. `feed` appends bytes and returns any
+/// fully-parsed `Snapshot`s whose event boundary just landed. Decoding
+/// happens once per complete event (boundary at `\n\n`), which means
+/// a multi-byte UTF-8 codepoint split across two TCP reads still
+/// decodes correctly — `String::from_utf8_lossy` per chunk would have
+/// turned the split into `U+FFFD` and dropped the snapshot.
+#[derive(Default)]
+struct SseBuf {
+    /// Raw bytes accumulated until the next `\n\n` event boundary.
+    bytes: Vec<u8>,
+    /// True when the last feed forced a buffer reset (cap exceeded).
+    /// Subsequent bytes are discarded until the next boundary so we
+    /// don't try to decode the tail of a corrupted event.
+    poisoned: bool,
+}
+
+impl SseBuf {
+    fn feed(&mut self, chunk: &[u8]) -> Vec<Snapshot> {
+        let mut out = Vec::new();
+
+        if self.poisoned {
+            // Skip until the first complete event boundary, then
+            // resume normal accumulation past it.
+            self.bytes.extend_from_slice(chunk);
+            if let Some(idx) = find_event_boundary(&self.bytes) {
+                self.bytes.drain(..idx + 2);
+                self.poisoned = false;
+            } else if self.bytes.len() > SSE_BUF_CAP {
+                self.bytes.clear();
+            }
+            return out;
+        }
+
+        self.bytes.extend_from_slice(chunk);
+        if self.bytes.len() > SSE_BUF_CAP {
+            self.bytes.clear();
+            self.poisoned = true;
+            return out;
+        }
+
+        while let Some(idx) = find_event_boundary(&self.bytes) {
+            let event: Vec<u8> = self.bytes.drain(..idx + 2).collect();
+            // Only decode at event boundaries — UTF-8 sequences are
+            // never split across SSE event boundaries (servers always
+            // send `\n\n` as ASCII), so the event itself is valid UTF-8
+            // even if individual chunks were not.
+            let event = match std::str::from_utf8(&event) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            for line in event.lines() {
+                let Some(json) = line.strip_prefix("data:") else { continue };
+                if let Ok(snap) = serde_json::from_str::<Snapshot>(json.trim()) {
+                    out.push(snap);
+                }
+            }
+        }
+        out
+    }
+}
+
+fn find_event_boundary(bytes: &[u8]) -> Option<usize> {
+    bytes.windows(2).position(|w| w == b"\n\n")
 }
 
 async fn poll_loop(tx: Sender<Snapshot>) {
@@ -169,4 +228,101 @@ fn build_snap(map: &HashMap<u16, PortCard>, scan_elapsed_ms: Option<u32>) -> Sna
     let mut ports: Vec<PortCard> = map.values().cloned().collect();
     ports.sort_by_key(|c| c.port);
     Snapshot { ports, scan_elapsed_ms }
+}
+
+#[cfg(test)]
+mod sse_buf_tests {
+    use super::*;
+
+    fn snap_event(elapsed: Option<u32>) -> String {
+        let snap = Snapshot { ports: vec![], scan_elapsed_ms: elapsed };
+        format!("data:{}\n\n", serde_json::to_string(&snap).unwrap())
+    }
+
+    #[test]
+    fn parses_one_event() {
+        let mut buf = SseBuf::default();
+        let out = buf.feed(snap_event(Some(42)).as_bytes());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].scan_elapsed_ms, Some(42));
+    }
+
+    #[test]
+    fn parses_two_events_in_one_chunk() {
+        let mut buf = SseBuf::default();
+        let mut chunk = snap_event(Some(1));
+        chunk.push_str(&snap_event(Some(2)));
+        let out = buf.feed(chunk.as_bytes());
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].scan_elapsed_ms, Some(1));
+        assert_eq!(out[1].scan_elapsed_ms, Some(2));
+    }
+
+    #[test]
+    fn buffers_event_split_across_chunks() {
+        let mut buf = SseBuf::default();
+        let event = snap_event(Some(7));
+        let bytes = event.as_bytes();
+        let split = bytes.len() / 2;
+        let out1 = buf.feed(&bytes[..split]);
+        assert_eq!(out1.len(), 0, "no event boundary yet");
+        let out2 = buf.feed(&bytes[split..]);
+        assert_eq!(out2.len(), 1);
+        assert_eq!(out2[0].scan_elapsed_ms, Some(7));
+    }
+
+    #[test]
+    fn handles_utf8_codepoint_split_across_chunks() {
+        // A multi-byte UTF-8 sequence (here the U+2026 ellipsis "…",
+        // 3 bytes: 0xE2 0x80 0xA6) split across feed() calls must still
+        // decode correctly when the event boundary lands. The previous
+        // String::from_utf8_lossy-per-chunk implementation would have
+        // turned the split into U+FFFD and dropped the snapshot.
+        let mut card = crate::state::PortCard::pending(
+            8080,
+            1,
+            "x".into(),
+            &crate::process::ProcInfo::default(),
+        );
+        card.title = Some("loading…".into()); // contains U+2026
+        let snap = Snapshot { ports: vec![card], scan_elapsed_ms: None };
+        let event = format!("data:{}\n\n", serde_json::to_string(&snap).unwrap());
+        let bytes = event.as_bytes();
+
+        // Find the byte position of the first 0xE2 (start of "…").
+        let split = bytes.iter().position(|b| *b == 0xE2).unwrap() + 1;
+        // Sanity-check we actually split mid-codepoint: byte at split
+        // index is the 2nd byte of "…" (continuation byte 0x80).
+        assert_eq!(bytes[split], 0x80, "split should land mid-codepoint");
+
+        let mut buf = SseBuf::default();
+        assert_eq!(buf.feed(&bytes[..split]).len(), 0);
+        let out = buf.feed(&bytes[split..]);
+        assert_eq!(out.len(), 1, "split-codepoint event must still decode");
+        assert_eq!(
+            out[0].ports[0].title.as_deref(),
+            Some("loading…"),
+            "ellipsis must survive the boundary split"
+        );
+    }
+
+    #[test]
+    fn caps_oversized_buffer_and_resyncs_on_next_boundary() {
+        let mut buf = SseBuf::default();
+        // Feed >1 MiB without a boundary — should poison + clear.
+        let junk = vec![b'x'; SSE_BUF_CAP + 16];
+        let out = buf.feed(&junk);
+        assert_eq!(out.len(), 0);
+        assert!(buf.poisoned, "buffer should be poisoned past the cap");
+        assert!(buf.bytes.is_empty(), "buffer should be cleared");
+
+        // Tail of the corrupted event arrives — still ignored.
+        assert_eq!(buf.feed(b"more junk").len(), 0);
+        // Boundary marks the end of the bad event; next event parses.
+        assert_eq!(buf.feed(b"\n\n").len(), 0);
+        assert!(!buf.poisoned, "next boundary clears the poison");
+        let out = buf.feed(snap_event(Some(99)).as_bytes());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].scan_elapsed_ms, Some(99));
+    }
 }
