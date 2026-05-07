@@ -57,25 +57,26 @@ pub(super) async fn fetch_from_daemon() -> Option<Snapshot> {
     if !is_skeleton(&snap) {
         return Some(snap);
     }
+
     // Daemon is mid-cycle — its current snapshot is a skeleton (probes
     // in flight). Poll briefly for the resolved version instead of
     // printing pending rows or redoing the scan locally. The daemon
-    // will emit a full snapshot within probe-wall-time; we cap at 6s.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
-    let mut last = snap;
-    while std::time::Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        match fetch_once(&client, &url).await {
-            Some(s) if !is_skeleton(&s) => return Some(s),
-            Some(s) => last = s,
-            None => break,
+    // will emit a full snapshot within probe-wall-time; we cap at 6s
+    // and fall back to None on timeout so the caller does a local scan.
+    let poll = async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            match fetch_once(&client, &url).await {
+                Some(s) if !is_skeleton(&s) => return Some(s),
+                Some(_) => continue,
+                None => return None,
+            }
         }
-    }
-    // Still a skeleton after the budget — return None so the caller
-    // falls back to a local one-shot scan instead of showing
-    // misleading "probing…" rows.
-    let _ = last;
-    None
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(6), poll)
+        .await
+        .ok()
+        .flatten()
 }
 
 async fn fetch_once(client: &reqwest::Client, url: &str) -> Option<Snapshot> {
