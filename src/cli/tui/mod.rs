@@ -96,18 +96,33 @@ async fn run_loop<B: ratatui::backend::Backend>(
     Ok(())
 }
 
-/// Spawn the platform's URL opener. macOS uses `open`, Linux `xdg-open`.
-/// Errors are swallowed — the TUI surfaces success/failure via a status
-/// line message, not a panic.
+/// Spawn the platform's URL opener. macOS uses `open`, Windows uses
+/// `cmd /c start`, all other Unix targets use `xdg-open`. Errors are
+/// swallowed — the TUI surfaces success/failure via a status line
+/// message, not a panic.
 pub(crate) fn open_in_browser(url: &str) -> bool {
-    let cmd = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
     };
-    std::process::Command::new(cmd)
-        .arg(url)
-        .stdout(std::process::Stdio::null())
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        // The empty title arg is intentional: `cmd /c start` treats the
+        // first quoted argument as the window title, so we pass "" and
+        // then the URL. Avoids interpreting URL fragments as a title.
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", "", url]);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    cmd.stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .is_ok()
