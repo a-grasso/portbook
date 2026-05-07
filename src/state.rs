@@ -84,14 +84,14 @@ pub struct Snapshot {
 /// Marker reason set on a [`PortCard`] when the row was synthesized
 /// from enumeration only — its real probe is still in flight. The TUI
 /// renders these as neutral/pending and includes them in the Live tab.
-pub const PENDING_REASON: &str = "probing…";
+pub(crate) const PENDING_REASON: &str = "probing…";
 
 impl PortCard {
     /// Build a placeholder card from enumeration + process inspection
     /// only — no probe has happened yet. Used to paint a skeleton on
     /// first frame so users don't stare at an empty UI for ~5s while
     /// retries time out.
-    pub fn pending(port: u16, pid: u32, command: String, proc: &ProcInfo) -> Self {
+    pub(crate) fn pending(port: u16, pid: u32, command: String, proc: &ProcInfo) -> Self {
         let project_root = proc.cwd.as_deref().and_then(crate::project::detect_root);
         let project_name = project_root.as_deref().map(crate::project::folder_name);
         Self {

@@ -42,17 +42,17 @@ pub enum Mode {
 }
 
 pub struct App {
-    pub snapshot: Snapshot,
-    pub tab: Tab,
-    pub selected: usize,
-    pub expanded: HashSet<u16>,
-    pub filter: String,
-    pub mode: Mode,
-    pub should_quit: bool,
-    pub source_label: &'static str,
+    pub(crate) snapshot: Snapshot,
+    pub(crate) tab: Tab,
+    pub(crate) selected: usize,
+    pub(crate) expanded: HashSet<u16>,
+    pub(crate) filter: String,
+    pub(crate) mode: Mode,
+    pub(crate) should_quit: bool,
+    pub(crate) source_label: &'static str,
     /// Transient one-line message shown in the footer (e.g. "opened 3000
     /// in browser"). Decays after `STATUS_TTL`.
-    pub status: Option<(String, Instant)>,
+    pub(crate) status: Option<(String, Instant)>,
     /// Last fully-probed kind seen for each port. Used so that a
     /// re-probe (pending placeholder) doesn't pull a previously-Dead
     /// row into the Live tab — the row stays in its last classification
