@@ -41,7 +41,12 @@ pub async fn run_tui() -> anyhow::Result<i32> {
     };
     let mut app = App::new(source_label);
 
-    let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel(8);
+    // `watch` channel: producer never blocks on a slow renderer, and
+    // the TUI only ever cares about the latest snapshot. Initial value
+    // is an empty snapshot so the first frame draws before any source
+    // event arrives.
+    let initial = crate::state::Snapshot { ports: Vec::new(), scan_elapsed_ms: None };
+    let (snap_tx, mut snap_rx) = tokio::sync::watch::channel(initial);
     source::spawn(snap_tx);
 
     terminal::enable_raw_mode()?;
@@ -65,7 +70,7 @@ async fn run_loop<B: ratatui::backend::Backend>(
     term: &mut Terminal<B>,
     app: &mut App,
     events: &mut EventStream,
-    snap_rx: &mut tokio::sync::mpsc::Receiver<crate::state::Snapshot>,
+    snap_rx: &mut tokio::sync::watch::Receiver<crate::state::Snapshot>,
 ) -> anyhow::Result<()> {
     term.draw(|f| ui::render(f, app))?;
     let mut redraw_tick = tokio::time::interval(Duration::from_millis(500));
@@ -83,7 +88,14 @@ async fn run_loop<B: ratatui::backend::Backend>(
                     _ => continue,
                 }
             }
-            Some(snap) = snap_rx.recv() => {
+            res = snap_rx.changed() => {
+                if res.is_err() {
+                    // Source task ended (channel closed). Keep
+                    // rendering — the TUI remains usable showing the
+                    // last seen snapshot until the user quits.
+                    continue;
+                }
+                let snap = snap_rx.borrow_and_update().clone();
                 app.ingest(snap);
             }
             _ = redraw_tick.tick() => {
