@@ -3,7 +3,7 @@
 use crate::probe::ProbeKind;
 use crate::state::{PortCard, Snapshot};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -32,22 +32,6 @@ impl Tab {
             Tab::Dead => "Dead",
         }
     }
-    /// Whether this tab should display `card`. Pending (skeleton) rows
-    /// ride along with the Live tab so the user sees them on first
-    /// paint instead of having to switch to All.
-    pub fn includes(self, card: &PortCard) -> bool {
-        if card.is_pending() {
-            // Pending rows live in All and Live (where the user usually
-            // is), but stay out of Error/Dead — they're not failures yet.
-            return matches!(self, Tab::All | Tab::Live);
-        }
-        match self {
-            Tab::All => true,
-            Tab::Live => card.kind == ProbeKind::Live,
-            Tab::Error => card.kind == ProbeKind::Error,
-            Tab::Dead => card.kind == ProbeKind::Dead,
-        }
-    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -69,6 +53,11 @@ pub struct App {
     /// Transient one-line message shown in the footer (e.g. "opened 3000
     /// in browser"). Decays after `STATUS_TTL`.
     pub status: Option<(String, Instant)>,
+    /// Last fully-probed kind seen for each port. Used so that a
+    /// re-probe (pending placeholder) doesn't pull a previously-Dead
+    /// row into the Live tab — the row stays in its last classification
+    /// until the new probe resolves.
+    last_kind: HashMap<u16, ProbeKind>,
 }
 
 const STATUS_TTL: std::time::Duration = std::time::Duration::from_millis(2500);
@@ -85,6 +74,7 @@ impl App {
             should_quit: false,
             source_label,
             status: None,
+            last_kind: HashMap::new(),
         }
     }
 
@@ -102,14 +92,24 @@ impl App {
 
     /// Drop in a fresh snapshot. Preserves the user's selection by port
     /// where possible — if the previously selected port is still listed,
-    /// the cursor stays on it. Otherwise it clamps.
+    /// the cursor stays on it. Otherwise it clamps. Also records each
+    /// port's last fully-probed kind so re-probe placeholders inherit
+    /// their previous tab assignment.
     pub fn ingest(&mut self, snap: Snapshot) {
-        let prev_port = self.visible_indices_for(&snap, &self.snapshot.ports)
-            .first()
-            .copied();
-        // Compute previous selection target before replacing snapshot.
         let prev_selected_port = self.selected_port();
         self.snapshot = snap;
+
+        // Update last-known classifications. Pending cards don't
+        // overwrite — they're transient by definition.
+        for c in &self.snapshot.ports {
+            if !c.is_pending() {
+                self.last_kind.insert(c.port, c.kind);
+            }
+        }
+        // Forget ports that aren't listening anymore.
+        let alive: HashSet<u16> = self.snapshot.ports.iter().map(|c| c.port).collect();
+        self.last_kind.retain(|p, _| alive.contains(p));
+
         let visible = self.visible_indices();
         if let Some(port) = prev_selected_port
             && let Some(pos) = visible
@@ -119,11 +119,31 @@ impl App {
             self.selected = pos;
             return;
         }
-        let _ = prev_port;
         if visible.is_empty() {
             self.selected = 0;
         } else {
             self.selected = self.selected.min(visible.len() - 1);
+        }
+    }
+
+    /// Whether the current tab should display `card`. For pending
+    /// (re-probe) placeholders, falls back to the port's last known
+    /// classification — so a previously-Dead row doesn't visually
+    /// hop into the Live tab during its re-probe.
+    fn show_in_tab(&self, card: &PortCard) -> bool {
+        let effective_kind = if card.is_pending() {
+            self.last_kind.get(&card.port).copied()
+        } else {
+            Some(card.kind)
+        };
+        match (self.tab, effective_kind) {
+            (Tab::All, _) => true,
+            // First-time pending (no prior state): optimistic Live.
+            (Tab::Live, None) => true,
+            (Tab::Live, Some(ProbeKind::Live)) => true,
+            (Tab::Error, Some(ProbeKind::Error)) => true,
+            (Tab::Dead, Some(ProbeKind::Dead)) => true,
+            _ => false,
         }
     }
 
@@ -134,15 +154,10 @@ impl App {
             .ports
             .iter()
             .enumerate()
-            .filter(|(_, c)| self.tab.includes(c))
+            .filter(|(_, c)| self.show_in_tab(c))
             .filter(|(_, c)| f.is_empty() || row_matches(c, &f))
             .map(|(i, _)| i)
             .collect()
-    }
-
-    fn visible_indices_for(&self, _snap: &Snapshot, _prev: &[PortCard]) -> Vec<usize> {
-        // Reserved for future smarter diff. Currently unused.
-        Vec::new()
     }
 
     pub fn selected_card(&self) -> Option<&PortCard> {
@@ -441,5 +456,63 @@ mod tests {
         assert!(a.expanded.contains(&3000));
         a.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
         assert!(!a.expanded.contains(&3000));
+    }
+
+    fn pending(port: u16) -> PortCard {
+        let proc = ProcInfo { cwd: None, cmdline: Some("x".into()) };
+        PortCard::pending(port, 1, "x".into(), &proc)
+    }
+
+    #[test]
+    fn re_probing_dead_port_stays_out_of_live_tab() {
+        let mut a = App::new("test");
+        a.tab = Tab::Live;
+        a.ingest(snap(vec![card(3000, ProbeKind::Dead, "down")]));
+        // Dead port not visible on Live tab.
+        assert_eq!(a.visible_indices().len(), 0);
+        // Cycle re-probes it — placeholder appears, but the row's last
+        // known kind was Dead, so it should NOT pop into Live.
+        a.ingest(snap(vec![pending(3000)]));
+        assert_eq!(a.visible_indices().len(), 0);
+    }
+
+    #[test]
+    fn re_probing_live_port_remains_visible_in_live_tab() {
+        let mut a = App::new("test");
+        a.tab = Tab::Live;
+        a.ingest(snap(vec![card(3000, ProbeKind::Live, "up")]));
+        assert_eq!(a.visible_indices().len(), 1);
+        a.ingest(snap(vec![pending(3000)]));
+        assert_eq!(a.visible_indices().len(), 1);
+    }
+
+    #[test]
+    fn brand_new_pending_port_appears_optimistically_in_live() {
+        let mut a = App::new("test");
+        a.tab = Tab::Live;
+        a.ingest(snap(vec![pending(3000)]));
+        assert_eq!(a.visible_indices().len(), 1);
+    }
+
+    #[test]
+    fn re_probing_dead_port_visible_on_dead_tab() {
+        let mut a = App::new("test");
+        a.tab = Tab::Dead;
+        a.ingest(snap(vec![card(3000, ProbeKind::Dead, "down")]));
+        assert_eq!(a.visible_indices().len(), 1);
+        a.ingest(snap(vec![pending(3000)]));
+        // Re-probe placeholder inherits the dead classification for filter purposes.
+        assert_eq!(a.visible_indices().len(), 1);
+    }
+
+    #[test]
+    fn forgotten_when_port_disappears() {
+        let mut a = App::new("test");
+        a.tab = Tab::Live;
+        a.ingest(snap(vec![card(3000, ProbeKind::Dead, "down")]));
+        a.ingest(snap(vec![]));
+        // Port re-appears as a fresh pending — should be optimistic again.
+        a.ingest(snap(vec![pending(3000)]));
+        assert_eq!(a.visible_indices().len(), 1);
     }
 }

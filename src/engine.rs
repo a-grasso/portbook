@@ -8,6 +8,8 @@ use crate::discovery::{Listener, PortEnumerator};
 use crate::probe::Prober;
 use crate::process::{ProcInfo, ProcessInspector};
 use crate::state::PortCard;
+use futures::StreamExt;
+use futures::stream::Stream;
 
 pub struct Engine {
     enumerator: Box<dyn PortEnumerator>,
@@ -52,6 +54,27 @@ impl Engine {
             .into_iter()
             .filter(|l| l.port > 1024 && l.port != SELF_PORT)
             .collect())
+    }
+
+    /// Probe the given listeners in parallel, yielding each `PortCard`
+    /// as its probe completes. Process inspection is fed in pre-done
+    /// (callers typically already inspected during the skeleton phase),
+    /// so this method only waits on probes — the long pole.
+    ///
+    /// Use this when the consumer can act on partial results (TUI,
+    /// scheduler broadcasting per resolution, `ls` progress meter). For
+    /// a final-only result use [`Engine::scan`].
+    pub fn scan_streaming_with_procs<'a>(
+        &'a self,
+        pairs: Vec<(Listener, ProcInfo)>,
+    ) -> impl Stream<Item = PortCard> + 'a {
+        let prober = &self.prober;
+        futures::stream::iter(pairs)
+            .map(move |(l, proc)| async move {
+                let probe = prober.probe(l.port).await;
+                PortCard::build(l.port, l.pid, l.command.clone(), &proc, &probe)
+            })
+            .buffer_unordered(64)
     }
 
     /// Probe + inspect the given listeners in parallel. Wall-time is the
