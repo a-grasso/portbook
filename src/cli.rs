@@ -1,6 +1,7 @@
 //! Terminal view over the Engine. View-only — no discovery / probe logic
 //! here, see `ARCHITECTURE.md`.
 
+mod explain;
 mod render;
 mod style;
 mod watch;
@@ -13,6 +14,7 @@ use render::render;
 use style::Style;
 use width::term_width;
 
+pub use explain::{ExplainOpts, run_explain, EXIT_PORT_NOT_FOUND};
 pub use style::ColorChoice;
 pub use watch::{WatchOpts, run_watch};
 

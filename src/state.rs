@@ -1,4 +1,4 @@
-use crate::probe::{ProbeKind, ProbeResult};
+use crate::probe::{ProbeError, ProbeKind, ProbeResult};
 use crate::process::ProcInfo;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -20,6 +20,12 @@ pub struct PortCard {
     pub cwd: Option<String>,
     pub cmdline: Option<String>,
     pub status: Option<u16>,
+    pub probed_url: Option<String>,
+    pub probed_at_unix: Option<u64>,
+    pub elapsed_ms: Option<u32>,
+    pub error_class: Option<ProbeError>,
+    pub error_detail: Option<String>,
+    pub attempts: u8,
 }
 
 impl PortCard {
@@ -40,6 +46,12 @@ impl PortCard {
             cwd: proc.cwd.clone(),
             cmdline: proc.cmdline.as_deref().map(crate::redact::redact_cmdline),
             status: probe.status,
+            probed_url: Some(probe.probed_url.clone()),
+            probed_at_unix: Some(probe.probed_at_unix),
+            elapsed_ms: Some(probe.elapsed_ms),
+            error_class: probe.error_class,
+            error_detail: probe.error_detail.clone(),
+            attempts: probe.attempts,
         }
     }
 }
@@ -53,6 +65,12 @@ pub struct AppState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub ports: Vec<PortCard>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AppState {

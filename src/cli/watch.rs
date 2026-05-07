@@ -82,6 +82,12 @@ mod tests {
             title: Some(title.into()),
             description: None,
             reason: None,
+            probed_url: format!("http://127.0.0.1:{port}/"),
+            probed_at_unix: 0,
+            elapsed_ms: 0,
+            error_class: None,
+            error_detail: None,
+            attempts: 1,
         };
         let proc = ProcInfo { cwd: None, cmdline: Some("x".into()) };
         Snapshot {

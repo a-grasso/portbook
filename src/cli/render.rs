@@ -172,6 +172,12 @@ mod tests {
             title: Some("Hello".into()),
             description: None,
             reason: None,
+            probed_url: "http://127.0.0.1:8000/".into(),
+            probed_at_unix: 0,
+            elapsed_ms: 12,
+            error_class: None,
+            error_detail: None,
+            attempts: 1,
         };
         let proc = ProcInfo { cwd: None, cmdline: Some("python -m http.server".into()) };
         Snapshot {
