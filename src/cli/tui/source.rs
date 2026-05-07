@@ -6,8 +6,8 @@
 
 use crate::BIND_ADDR;
 use crate::engine::Engine;
-use crate::state::Snapshot;
-use std::time::Duration;
+use crate::state::{PortCard, Snapshot};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
 use tokio_stream::StreamExt;
 
@@ -85,23 +85,56 @@ async fn try_sse(tx: Sender<Snapshot>) -> bool {
 
 async fn poll_loop(tx: Sender<Snapshot>) {
     let engine = Engine::new();
-    // Send first snapshot immediately so the user doesn't stare at an
-    // empty UI for 3s.
-    if let Ok(ports) = engine.scan_all().await
-        && tx.send(Snapshot { ports }).await.is_err()
-    {
+    // First cycle: progressive. Skeleton (enumerate-only, ~100ms) lands
+    // on screen instantly; the full probed snapshot replaces it once
+    // probes finish (could be up to 5s for a dead port retry chain).
+    if scan_cycle(&engine, &tx, true).await.is_err() {
         return;
     }
     let mut ticker = tokio::time::interval(POLL_INTERVAL);
     ticker.tick().await; // discard immediate first tick
     loop {
         ticker.tick().await;
-        let ports = match engine.scan_all().await {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        if tx.send(Snapshot { ports }).await.is_err() {
+        if scan_cycle(&engine, &tx, false).await.is_err() {
             break;
         }
     }
+}
+
+/// One scan cycle. Optionally emits a skeleton frame first.
+async fn scan_cycle(
+    engine: &Engine,
+    tx: &Sender<Snapshot>,
+    with_skeleton: bool,
+) -> Result<(), ()> {
+    if with_skeleton
+        && let Ok(pairs) = engine.enumerate_with_procs()
+    {
+        let ports: Vec<PortCard> = pairs
+            .into_iter()
+            .map(|(l, proc)| PortCard::pending(l.port, l.pid, l.command, &proc))
+            .collect();
+        // Skeleton has no scan timing — probes haven't run yet.
+        if tx
+            .send(Snapshot { ports, scan_elapsed_ms: None })
+            .await
+            .is_err()
+        {
+            return Err(());
+        }
+    }
+    let start = Instant::now();
+    let ports = match engine.scan_all().await {
+        Ok(p) => p,
+        Err(_) => return Ok(()),
+    };
+    let elapsed_ms = start.elapsed().as_millis().min(u32::MAX as u128) as u32;
+    if tx
+        .send(Snapshot { ports, scan_elapsed_ms: Some(elapsed_ms) })
+        .await
+        .is_err()
+    {
+        return Err(());
+    }
+    Ok(())
 }

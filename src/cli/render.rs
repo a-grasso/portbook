@@ -182,6 +182,7 @@ mod tests {
         let proc = ProcInfo { cwd: None, cmdline: Some("python -m http.server".into()) };
         Snapshot {
             ports: vec![PortCard::build(8000, 1234, "python".into(), &proc, &probe_live)],
+            scan_elapsed_ms: None,
         }
     }
 

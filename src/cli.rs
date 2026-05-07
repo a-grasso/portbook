@@ -55,6 +55,11 @@ pub(super) async fn fetch_from_daemon() -> Option<Snapshot> {
 }
 
 pub(super) async fn one_shot_scan() -> anyhow::Result<Snapshot> {
+    let start = std::time::Instant::now();
     let ports = Engine::new().scan_all().await?;
-    Ok(Snapshot { ports })
+    let elapsed_ms = start.elapsed().as_millis().min(u32::MAX as u128) as u32;
+    Ok(Snapshot {
+        ports,
+        scan_elapsed_ms: Some(elapsed_ms),
+    })
 }
