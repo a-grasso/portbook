@@ -81,12 +81,29 @@ impl Engine {
     /// filters (port > 1024, not portbook itself).
     pub fn enumerate(&self) -> anyhow::Result<Vec<Listener>>;
 
+    /// Enumerate + inspect (no probing). Used to paint a skeleton
+    /// frame before slow probes complete.
+    pub fn enumerate_with_procs(&self) -> anyhow::Result<Vec<(Listener, ProcInfo)>>;
+
     /// Probe + inspect a set of listeners in parallel. The Engine
     /// does not cache; callers layer caching on top.
     pub async fn scan(&self, listeners: Vec<Listener>) -> Vec<PortCard>;
 
     /// Convenience: enumerate + scan in one call.
     pub async fn scan_all(&self) -> anyhow::Result<Vec<PortCard>>;
+
+    /// Probe pre-resolved (Listener, ProcInfo) pairs in parallel,
+    /// yielding each PortCard as it lands. Use when the consumer
+    /// can act on partial results.
+    pub fn scan_stream<'a>(&'a self, pairs: Vec<(Listener, ProcInfo)>)
+        -> impl Stream<Item = PortCard> + 'a;
+
+    /// Run one full poll cycle (enumerate → skeleton → stream probes
+    /// → done) and yield producer events. Both the daemon scheduler
+    /// and the TUI poll loop go through this method, plugging in their
+    /// own cache strategy via `CycleCache`.
+    pub fn run_cycle<'a, C: CycleCache + 'a>(&'a self, cache: &'a mut C)
+        -> impl Stream<Item = CycleEvent> + 'a;
 }
 ```
 
@@ -94,11 +111,29 @@ This is the *only* place that knows how to turn "I want a snapshot of
 local services" into a `Vec<PortCard>`. Optimisations (parallel probes,
 TCP pre-peek, skip-list of non-HTTP ports) happen here once.
 
+`run_cycle` is the canonical primitive for repeated polling — it owns
+the skeleton-then-stream-then-final shape, parameterized by cache
+strategy. `scan` and `scan_all` remain as one-shot convenience
+collectors. The producer yields `Skeleton` (when any listener is
+uncached), `Resolved(card)` per probe completion, and `Done { elapsed_ms }`
+last; consumers map these to their sink (broadcast snapshot for the
+daemon, watch channel for the TUI).
+
+The Snapshot view contract uses `scan_elapsed_ms = None` as the "skeleton
+in flight" signal and `Some(_)` as "resolved". Per-card,
+`PortCard.pending: bool` is the explicit, machine-readable skeleton
+flag (the historical `reason="probing…"` string is kept only for
+human-facing display and pre-v0.1.7 compat).
+
 ### Who calls it
 
 - `cli::run_ls` → `Engine::scan_all()` (or daemon's `/api/ports`).
-- `scheduler::cycle` → `Engine::enumerate()` + `Engine::scan()` with
-  its own cache layered on, then publish to `AppState`.
+- `cli::one_shot_scan_with_progress` → `Engine::scan_stream()` for the
+  `ls` progress meter.
+- `scheduler::cycle` → `Engine::run_cycle()` with a PID+command-keyed
+  cache, then publish to `AppState`.
+- `cli::tui` → `Engine::run_cycle()` with a port-only cache, then
+  forward snapshots over a `watch` channel to the renderer.
 - Future `portbook watch` → `Engine::scan_all()` in a loop, JSON to
   stdout.
 - Future `portbook stats` → reads counters that the Engine emits.
@@ -119,9 +154,24 @@ TCP pre-peek, skip-list of non-HTTP ports) happen here once.
 - May call `Engine` directly, or fetch `/api/ports` from a running daemon.
 - Renders `Snapshot` to a tty (colored, grouped) or to stdout (JSON, TSV)
   when not a tty or when `--json` is passed.
-- Must respect `--no-color`, `$NO_COLOR`, and `PORTBOOK_HEADLESS=1`.
+- Must respect `--color`, `$NO_COLOR`, and `PORTBOOK_HEADLESS=1`.
 - Must not import `discovery::*`, `process::*`, or `probe::*` directly
   for anything other than constructing an `Engine`.
+- Multi-file feature subdirs are allowed under `src/cli/` once a feature
+  exceeds ~300 LOC (`cli/tui/{mod,app,source,ui}.rs` is the precedent).
+  Single-file features stay flat at `src/cli/<name>.rs`.
+
+### TUI (`src/cli/tui/*`)
+
+- Consumes the daemon's SSE stream when present, falls back to
+  `Engine::run_cycle` polling otherwise. Source label ("daemon" vs
+  "polling") is shown in the footer.
+- Snapshots flow into the renderer over a `tokio::sync::watch` channel:
+  the producer never blocks on a slow renderer and intermediate frames
+  coalesce under load.
+- `App` is a pure state machine; `ui::render` takes `&App` so the borrow
+  checker enforces "view never mutates state". Handler logic lives on
+  `App`, drawing logic in `ui.rs`.
 
 ### Web UI (`assets/*`)
 
