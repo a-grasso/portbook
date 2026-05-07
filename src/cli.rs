@@ -4,6 +4,7 @@
 mod explain;
 mod render;
 mod style;
+mod tui;
 mod watch;
 mod width;
 
@@ -16,6 +17,7 @@ use width::term_width;
 
 pub use explain::{ExplainOpts, run_explain, EXIT_PORT_NOT_FOUND};
 pub use style::ColorChoice;
+pub use tui::{run_tui, EXIT_NOT_A_TTY};
 pub use watch::{WatchOpts, run_watch};
 
 #[derive(Default, Debug, Clone, Copy)]
