@@ -116,7 +116,7 @@ pub(super) async fn one_shot_scan_with_progress(show_progress: bool) -> anyhow::
         let _ = std::io::Write::flush(&mut std::io::stderr());
     }
 
-    let mut stream = std::pin::pin!(engine.scan_streaming_with_procs(pairs));
+    let mut stream = std::pin::pin!(engine.scan_stream(pairs));
     while let Some(card) = stream.next().await {
         completed += 1;
         if progress_on {
