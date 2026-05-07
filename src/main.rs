@@ -1,6 +1,6 @@
 use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use portbook::cli::{ColorChoice, LsOpts, WatchOpts};
+use portbook::cli::{ColorChoice, ExplainOpts, LsOpts, WatchOpts};
 use portbook::{AppState, BIND_ADDR, VersionState, build_app, print_completions, scheduler::Scheduler, tracing_filter, version};
 use std::net::SocketAddr;
 use tracing::info;
@@ -25,6 +25,8 @@ enum Command {
     Ls(LsArgs),
     /// Stream snapshots on an interval (good for piping to jq).
     Watch(WatchArgs),
+    /// Explain how a single port was classified (paste-ready diagnostic block).
+    Explain(ExplainArgs),
     /// Generate shell completion script (e.g. `portbook completions zsh`).
     Completions {
         /// Target shell.
@@ -85,6 +87,21 @@ impl From<CliColor> for ColorChoice {
     }
 }
 
+#[derive(Args)]
+struct ExplainArgs {
+    /// Port number to explain.
+    port: u16,
+    /// Emit a single JSON object instead of a paste-ready text block.
+    #[arg(long)]
+    json: bool,
+}
+
+impl From<ExplainArgs> for ExplainOpts {
+    fn from(a: ExplainArgs) -> Self {
+        ExplainOpts { port: a.port, json: a.json }
+    }
+}
+
 impl From<LsArgs> for LsOpts {
     fn from(a: LsArgs) -> Self {
         LsOpts { all: a.all, live: a.live, color: a.color.into(), json: a.json }
@@ -98,6 +115,13 @@ async fn main() -> anyhow::Result<()> {
     match cmd {
         Command::Ls(args) => portbook::cli::run_ls(args.into()).await,
         Command::Watch(args) => portbook::cli::run_watch(args.into()).await,
+        Command::Explain(args) => {
+            let code = portbook::cli::run_explain(args.into()).await?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
         Command::Serve => run_serve(cli.verbose).await,
         Command::Completions { shell } => {
             let mut cmd = Cli::command();

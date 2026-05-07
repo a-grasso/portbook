@@ -17,8 +17,59 @@ tabs.forEach((t) => {
   });
 });
 
+const SEP = "";
+
 function sig(c) {
-  return [c.kind, c.url, c.reason || "", c.project_name || "", c.title || "", c.description || "", c.cmdline || c.command || ""].join("");
+  return [
+    c.kind, c.url, c.reason || "", c.project_name || "",
+    c.title || "", c.description || "", c.cmdline || c.command || "",
+    c.status ?? "", c.elapsed_ms ?? "", c.error_class || "", c.error_detail || "",
+    c.probed_url || "", c.probed_at_unix ?? "", c.attempts ?? "",
+  ].join(SEP);
+}
+
+function fmtTimestamp(unix) {
+  if (!unix) return "—";
+  try { return new Date(unix * 1000).toISOString(); } catch (_) { return `unix ${unix}`; }
+}
+
+const DIAG_FIELDS = [
+  ["pid",          (c) => c.pid],
+  ["command",      (c) => c.cmdline || c.command || "—"],
+  ["cwd",          (c) => c.cwd || "—"],
+  ["project",      (c) => c.project_name || "—"],
+  ["kind",         (c) => c.kind],
+  ["reason",       (c) => c.reason || "—"],
+  ["http status",  (c) => c.status ?? "—"],
+  ["title",        (c) => c.title || "—"],
+  ["probed url",   (c) => c.probed_url || "—"],
+  ["elapsed (ms)", (c) => c.elapsed_ms ?? "—"],
+  ["attempts",     (c) => c.attempts ?? "—"],
+  ["error class",  (c) => c.error_class || "—"],
+  ["error detail", (c) => c.error_detail || "—"],
+  ["probed at",    (c) => fmtTimestamp(c.probed_at_unix)],
+];
+
+function renderDiag(node, c) {
+  const dl = node.querySelector(".diag-grid");
+  if (!dl) return;
+  dl.innerHTML = "";
+  for (const [label, get] of DIAG_FIELDS) {
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = String(get(c));
+    dl.append(dt, dd);
+  }
+}
+
+function buildPasteReport(c) {
+  const lines = [`portbook explain :${c.port}`, "─────────────────────────────────────────"];
+  lines.push(`port             : ${c.port}`);
+  for (const [label, get] of DIAG_FIELDS) {
+    lines.push(`${label.padEnd(16)} : ${get(c)}`);
+  }
+  return lines.join("\n");
 }
 
 function fillCard(node, c) {
@@ -39,6 +90,30 @@ function fillCard(node, c) {
   node.querySelector(".title").textContent = c.title || "";
   node.querySelector(".desc").textContent = c.description || "";
   node.querySelector(".cmd").textContent = c.cmdline || c.command || "";
+  renderDiag(node, c);
+}
+
+function attachDiagHandlers(node, getCard) {
+  const details = node.querySelector(".diag");
+  if (details) {
+    details.addEventListener("click", (e) => e.stopPropagation());
+  }
+  const btn = node.querySelector(".diag-copy");
+  if (btn) {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const text = buildPasteReport(getCard());
+      try {
+        await navigator.clipboard.writeText(text);
+        const original = btn.textContent;
+        btn.textContent = "copied";
+        setTimeout(() => { btn.textContent = original; }, 1200);
+      } catch (_) {
+        btn.textContent = "copy failed";
+      }
+    });
+  }
 }
 
 function render(snapshot) {
@@ -77,9 +152,12 @@ function render(snapshot) {
         window.open(el.href, `portbook-${c.port}`);
       });
       fillCard(el, c);
-      nodes.set(c.port, { el, sig: sig(c) });
-      entry = nodes.get(c.port);
+      const newEntry = { el, sig: sig(c), card: c };
+      attachDiagHandlers(el, () => newEntry.card);
+      nodes.set(c.port, newEntry);
+      entry = newEntry;
     } else {
+      entry.card = c;
       const s = sig(c);
       if (s !== entry.sig) {
         fillCard(entry.el, c);

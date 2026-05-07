@@ -29,6 +29,7 @@ portbook watch --json | jq …   # streaming JSON for agents and scripts
   - **`portbook watch [--json]`** — streaming snapshots for agents and scripts
 - Stable JSON schema (`/api/ports`, `ls --json`, `watch --json`) — same shape everywhere
 - Cmdline secret redaction at the API boundary (tokens, passwords, URLs with userinfo)
+- **`portbook explain <port>`** — paste-ready diagnostic block (probe URL, elapsed time, error class, attempts) for filing issues when a port is misclassified
 - Shell completions for bash / zsh / fish / elvish / powershell
 - Single static binary, ~5 MB, no runtime dependencies beyond `lsof` (macOS) or `ss` (Linux)
 
@@ -59,6 +60,8 @@ portbook ls --all              # also show dead ports (collapsed by default)
 portbook ls --json             # one JSON snapshot, machine-readable
 portbook watch --json          # stream JSON snapshots on a 3s interval
 portbook watch --interval 5    # custom polling interval (seconds)
+portbook explain 3000          # diagnostic block for a single port (paste into issues)
+portbook explain 3000 --json   # same data as a single JSON object
 portbook completions zsh       # shell completion script (bash, zsh, fish, …)
 portbook --version
 ```
@@ -103,7 +106,15 @@ portbook watch --json | jq -c '.ports | map(.port)'
       "project_name":  "project-name",        // basename of project_root
       "cwd":           "/path/to/project",
       "cmdline":       "python3 -m http.server 8421",  // redacted (token=…, key=…, etc.)
-      "status":        200                    // HTTP status when probed
+      "status":        200,                   // HTTP status when probed
+
+      // Diagnostics — populated for every probe, surfaced by `explain`:
+      "probed_url":     "http://127.0.0.1:8421/",
+      "probed_at_unix": 1778169793,           // unix seconds at probe start
+      "elapsed_ms":     12,                   // wall time of the probe
+      "error_class":    null,                 // "timeout" | "connect" | "decode" | "body" | "other"
+      "error_detail":   null,                 // truncated underlying error message
+      "attempts":       1                     // 1, or 2 if a transient error triggered a retry
     }
   ]
 }
@@ -121,6 +132,7 @@ applied for `/api/ports`, `/api/stream`, `ls`, and `watch`.
 - `0` — success
 - `1` — runtime error (scan failed, daemon refused connection, etc.)
 - `2` — CLI misuse (unknown flag, bad value); emitted by clap
+- `3` — `portbook explain <port>`: the requested port isn't currently listening
 
 ## Platform support
 

@@ -127,6 +127,12 @@ async fn state_with_planted_card(port: u16) -> AppState {
         title: None,
         description: None,
         reason: None,
+        probed_url: format!("http://127.0.0.1:{port}/"),
+        probed_at_unix: 0,
+        elapsed_ms: 0,
+        error_class: None,
+        error_detail: None,
+        attempts: 1,
     };
     let card = PortCard::build(port, 999, "myapp".into(), &proc, &probe);
     let mut map = HashMap::new();
