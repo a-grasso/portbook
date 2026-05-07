@@ -4,11 +4,46 @@ All notable changes to portbook are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-05-07
+
+### Bug Fixes
+
+- Only render pending placeholders for first-time-seen ports
+- SSE parser cap buffer, decode at event boundary
+- Give EXIT_NOT_A_TTY a dedicated exit code (4)
+- Handle Windows in open_in_browser
+- Wire popover title to aria-labelledby
+- Preserve cached cards across re-probe cycles
+
+### Documentation
+
+- Document run_cycle, TUI surface, snapshot signals
+
+### Features
+
+- Add `portbook tui` interactive terminal app
+- Show port diagnostics in a floating popover instead of inline
+- Progressive skeleton rendering + scan timing telemetry
+- Stream probe completions; ls progress meter; sticky tabs
+- Add explicit pending bool to PortCard JSON
+
+### Refactor
+
+- Extract Engine::run_cycle, eliminate map clones, type-safe outcomes
+- Use tokio::time::timeout for daemon skeleton poll
+- Narrow visibility on internal types
+- Rename scan_streaming_with_procs → scan_stream
+- Swap mpsc for watch on the snapshot channel
+
 ## [0.1.6] - 2026-05-07
 
 ### Build
 
 - Add `just release` recipe for tagged releases
+
+### Chores
+
+- V0.1.6
 
 ### Documentation
 
