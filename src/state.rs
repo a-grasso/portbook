@@ -58,13 +58,70 @@ impl PortCard {
 
 #[derive(Clone)]
 pub struct AppState {
-    inner: Arc<RwLock<HashMap<u16, PortCard>>>,
+    inner: Arc<RwLock<Inner>>,
     tx: broadcast::Sender<Snapshot>,
+}
+
+#[derive(Default)]
+struct Inner {
+    cards: HashMap<u16, PortCard>,
+    /// Wall time of the most recent scan that produced these cards.
+    /// `None` means the cards are a skeleton (enumeration only, probes
+    /// in flight) — not yet a full scan result.
+    scan_elapsed_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub ports: Vec<PortCard>,
+    /// Wall time of the scan cycle that produced this snapshot, in
+    /// milliseconds. `None` for skeleton snapshots (enumerate-only,
+    /// probes still in flight) and for pre-v0.1.7 snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_elapsed_ms: Option<u32>,
+}
+
+/// Marker reason set on a [`PortCard`] when the row was synthesized
+/// from enumeration only — its real probe is still in flight. The TUI
+/// renders these as neutral/pending and includes them in the Live tab.
+pub const PENDING_REASON: &str = "probing…";
+
+impl PortCard {
+    /// Build a placeholder card from enumeration + process inspection
+    /// only — no probe has happened yet. Used to paint a skeleton on
+    /// first frame so users don't stare at an empty UI for ~5s while
+    /// retries time out.
+    pub fn pending(port: u16, pid: u32, command: String, proc: &ProcInfo) -> Self {
+        let project_root = proc.cwd.as_deref().and_then(crate::project::detect_root);
+        let project_name = project_root.as_deref().map(crate::project::folder_name);
+        Self {
+            port,
+            pid,
+            command,
+            url: format!("http://localhost:{port}"),
+            kind: ProbeKind::Dead,
+            reason: Some(PENDING_REASON.into()),
+            title: None,
+            description: None,
+            project_root,
+            project_name,
+            cwd: proc.cwd.clone(),
+            cmdline: proc.cmdline.as_deref().map(crate::redact::redact_cmdline),
+            status: None,
+            probed_url: None,
+            probed_at_unix: None,
+            elapsed_ms: None,
+            error_class: None,
+            error_detail: None,
+            attempts: 0,
+        }
+    }
+
+    /// True when this card is a skeleton placeholder rather than a
+    /// fully-probed result. See [`PortCard::pending`].
+    pub fn is_pending(&self) -> bool {
+        self.attempts == 0 && self.reason.as_deref() == Some(PENDING_REASON)
+    }
 }
 
 impl Default for AppState {
@@ -76,23 +133,40 @@ impl Default for AppState {
 impl AppState {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(16);
-        Self { inner: Arc::new(RwLock::new(HashMap::new())), tx }
+        Self {
+            inner: Arc::new(RwLock::new(Inner::default())),
+            tx,
+        }
     }
 
     pub async fn snapshot(&self) -> Snapshot {
-        let map = self.inner.read().await;
-        let mut ports: Vec<PortCard> = map.values().cloned().collect();
+        let inner = self.inner.read().await;
+        let mut ports: Vec<PortCard> = inner.cards.values().cloned().collect();
         ports.sort_by_key(|c| c.port);
-        Snapshot { ports }
+        Snapshot {
+            ports,
+            scan_elapsed_ms: inner.scan_elapsed_ms,
+        }
     }
 
-    pub async fn replace(&self, new_map: HashMap<u16, PortCard>) {
+    /// Replace the full state with a completed scan cycle. `elapsed_ms`
+    /// is the wall time of the scan that produced these cards; it
+    /// rides along on every emitted [`Snapshot`].
+    pub async fn replace(&self, new_map: HashMap<u16, PortCard>, elapsed_ms: Option<u32>) {
         {
             let mut w = self.inner.write().await;
-            *w = new_map;
+            w.cards = new_map;
+            w.scan_elapsed_ms = elapsed_ms;
         }
         let snap = self.snapshot().await;
         let _ = self.tx.send(snap);
+    }
+
+    /// Replace the state with skeleton cards (enumeration only, probes
+    /// pending). `scan_elapsed_ms` is cleared. Used by the scheduler
+    /// to paint a fast first frame before slow probes finish.
+    pub async fn replace_skeleton(&self, skeleton: HashMap<u16, PortCard>) {
+        self.replace(skeleton, None).await;
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Snapshot> {

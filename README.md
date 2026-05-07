@@ -118,7 +118,12 @@ portbook watch --json | jq -c '.ports | map(.port)'
       "error_detail":   null,                 // truncated underlying error message
       "attempts":       1                     // 1, or 2 if a transient error triggered a retry
     }
-  ]
+  ],
+
+  // Wall time of the scan cycle that produced this snapshot, in ms.
+  // Omitted on skeleton (probes-in-flight) snapshots and on pre-v0.1.7
+  // snapshots. Useful for spotting latency regressions.
+  "scan_elapsed_ms": 152
 }
 ```
 

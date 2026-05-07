@@ -32,12 +32,20 @@ impl Tab {
             Tab::Dead => "Dead",
         }
     }
-    pub fn matches(self, k: ProbeKind) -> bool {
+    /// Whether this tab should display `card`. Pending (skeleton) rows
+    /// ride along with the Live tab so the user sees them on first
+    /// paint instead of having to switch to All.
+    pub fn includes(self, card: &PortCard) -> bool {
+        if card.is_pending() {
+            // Pending rows live in All and Live (where the user usually
+            // is), but stay out of Error/Dead — they're not failures yet.
+            return matches!(self, Tab::All | Tab::Live);
+        }
         match self {
             Tab::All => true,
-            Tab::Live => k == ProbeKind::Live,
-            Tab::Error => k == ProbeKind::Error,
-            Tab::Dead => k == ProbeKind::Dead,
+            Tab::Live => card.kind == ProbeKind::Live,
+            Tab::Error => card.kind == ProbeKind::Error,
+            Tab::Dead => card.kind == ProbeKind::Dead,
         }
     }
 }
@@ -68,7 +76,7 @@ const STATUS_TTL: std::time::Duration = std::time::Duration::from_millis(2500);
 impl App {
     pub fn new(source_label: &'static str) -> Self {
         Self {
-            snapshot: Snapshot { ports: Vec::new() },
+            snapshot: Snapshot { ports: Vec::new(), scan_elapsed_ms: None },
             tab: Tab::default(),
             selected: 0,
             expanded: HashSet::new(),
@@ -126,7 +134,7 @@ impl App {
             .ports
             .iter()
             .enumerate()
-            .filter(|(_, c)| self.tab.matches(c.kind))
+            .filter(|(_, c)| self.tab.includes(c))
             .filter(|(_, c)| f.is_empty() || row_matches(c, &f))
             .map(|(i, _)| i)
             .collect()
@@ -150,10 +158,14 @@ impl App {
     pub fn counts(&self) -> Counts {
         let mut c = Counts::default();
         for p in &self.snapshot.ports {
-            match p.kind {
-                ProbeKind::Live => c.live += 1,
-                ProbeKind::Error => c.error += 1,
-                ProbeKind::Dead => c.dead += 1,
+            if p.is_pending() {
+                c.pending += 1;
+            } else {
+                match p.kind {
+                    ProbeKind::Live => c.live += 1,
+                    ProbeKind::Error => c.error += 1,
+                    ProbeKind::Dead => c.dead += 1,
+                }
             }
             c.total += 1;
         }
@@ -266,6 +278,7 @@ pub struct Counts {
     pub live: usize,
     pub error: usize,
     pub dead: usize,
+    pub pending: usize,
     pub total: usize,
 }
 
@@ -323,7 +336,7 @@ mod tests {
     }
 
     fn snap(cards: Vec<PortCard>) -> Snapshot {
-        Snapshot { ports: cards }
+        Snapshot { ports: cards, scan_elapsed_ms: None }
     }
 
     #[test]

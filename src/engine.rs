@@ -24,6 +24,25 @@ impl Engine {
         }
     }
 
+    /// Enumerate listeners and inspect each owning process — fast.
+    /// Skips probing entirely. Used to paint a TUI/web skeleton before
+    /// slow HTTP probes complete.
+    pub fn enumerate_with_procs(&self) -> anyhow::Result<Vec<(Listener, ProcInfo)>> {
+        let listeners = self.enumerate()?;
+        let inspector = self.inspector.as_ref();
+        Ok(listeners
+            .into_iter()
+            .map(|l| {
+                let proc = if l.pid == 0 {
+                    ProcInfo::default()
+                } else {
+                    inspector.inspect(l.pid)
+                };
+                (l, proc)
+            })
+            .collect())
+    }
+
     /// All current listeners on the host, after portbook's standard filters
     /// (port > 1024, not portbook itself).
     pub fn enumerate(&self) -> anyhow::Result<Vec<Listener>> {

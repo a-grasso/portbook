@@ -105,10 +105,14 @@ fn render_list(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn build_item(card: &PortCard, expanded: bool, width: usize) -> ListItem<'static> {
-    let kind_color = match card.kind {
-        ProbeKind::Live => Color::Green,
-        ProbeKind::Error => Color::Yellow,
-        ProbeKind::Dead => Color::Red,
+    let kind_color = if card.is_pending() {
+        Color::DarkGray
+    } else {
+        match card.kind {
+            ProbeKind::Live => Color::Green,
+            ProbeKind::Error => Color::Yellow,
+            ProbeKind::Dead => Color::Red,
+        }
     };
     let port = format!(":{}", card.port);
     let title = card.title.as_deref().unwrap_or("(no title)");
@@ -128,7 +132,8 @@ fn build_item(card: &PortCard, expanded: bool, width: usize) -> ListItem<'static
             Style::default().fg(Color::DarkGray),
         ));
     }
-    if !matches!(card.kind, ProbeKind::Live)
+    let show_reason = card.is_pending() || !matches!(card.kind, ProbeKind::Live);
+    if show_reason
         && let Some(reason) = card.reason.as_deref()
     {
         head.push(Span::raw("  "));
@@ -200,10 +205,16 @@ fn kind_str(k: ProbeKind) -> &'static str {
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
+    let scan_label = match app.snapshot.scan_elapsed_ms {
+        Some(ms) => format!("scan:{ms}ms"),
+        None if !app.snapshot.ports.is_empty() => "scan:probing…".to_string(),
+        None => "scan:—".to_string(),
+    };
     let hint = match app.mode {
         Mode::Normal => format!(
-            "j/k navigate · Tab cycle · Space expand · Enter open · / filter · q quit  ·  src:{}  v{}",
+            "j/k · Tab · Space expand · Enter open · / filter · q quit  ·  src:{} · {}  v{}",
             app.source_label,
+            scan_label,
             env!("CARGO_PKG_VERSION")
         ),
         Mode::Filtering => format!(

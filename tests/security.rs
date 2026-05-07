@@ -137,7 +137,7 @@ async fn state_with_planted_card(port: u16) -> AppState {
     let card = PortCard::build(port, 999, "myapp".into(), &proc, &probe);
     let mut map = HashMap::new();
     map.insert(port, card);
-    state.replace(map).await;
+    state.replace(map, None).await;
     state
 }
 

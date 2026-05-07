@@ -64,8 +64,10 @@ pub async fn run_watch(opts: WatchOpts) -> anyhow::Result<()> {
 
 /// Stable signature of a snapshot for change detection. Two snapshots
 /// produce the same signature iff their visible content is identical.
+/// Excludes `scan_elapsed_ms` — that drifts every cycle and isn't a
+/// meaningful "the world changed" signal.
 pub(super) fn snapshot_signature(snap: &Snapshot) -> String {
-    serde_json::to_string(snap).unwrap_or_default()
+    serde_json::to_string(&snap.ports).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -92,6 +94,7 @@ mod tests {
         let proc = ProcInfo { cwd: None, cmdline: Some("x".into()) };
         Snapshot {
             ports: vec![PortCard::build(port, 1, "x".into(), &proc, &probe)],
+            scan_elapsed_ms: None,
         }
     }
 
@@ -111,7 +114,7 @@ mod tests {
 
     #[test]
     fn signature_changes_when_port_added() {
-        let a = Snapshot { ports: vec![] };
+        let a = Snapshot { ports: vec![], scan_elapsed_ms: None };
         let b = one_port_snapshot(8000, "Hi");
         assert_ne!(snapshot_signature(&a), snapshot_signature(&b));
     }
