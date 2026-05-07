@@ -78,7 +78,7 @@ impl Engine {
     /// Use this when the consumer can act on partial results (TUI,
     /// scheduler broadcasting per resolution, `ls` progress meter). For
     /// a final-only result use [`Engine::scan`].
-    pub fn scan_streaming_with_procs<'a>(
+    pub fn scan_stream<'a>(
         &'a self,
         pairs: Vec<(Listener, ProcInfo)>,
     ) -> impl Stream<Item = PortCard> + 'a {
@@ -166,7 +166,7 @@ impl Engine {
                 yield CycleEvent::Skeleton(map.clone());
             }
 
-            let mut stream = std::pin::pin!(self.scan_streaming_with_procs(to_probe));
+            let mut stream = std::pin::pin!(self.scan_stream(to_probe));
             while let Some(card) = stream.next().await {
                 cache.insert(&card);
                 yield CycleEvent::Resolved(Box::new(card));
