@@ -4,7 +4,9 @@
 
 use crate::discovery::Listener;
 use crate::engine::Engine;
+use crate::process::ProcInfo;
 use crate::state::{AppState, PortCard};
+use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
@@ -52,36 +54,35 @@ impl Scheduler {
             pairs.iter().map(|(l, _)| CacheKey::from(l)).collect();
         self.cache.retain(|k, _| live_keys.contains(k));
 
-        // Split into cached (instant) and to-probe (delegated to Engine).
-        // Build a skeleton map alongside so we can paint the first frame
-        // before slow probes finish — uncached rows render as "probing…".
+        // Build the working map: cached cards land immediately; uncached
+        // ports get a pending placeholder until their probe streams in.
         let mut new_map: HashMap<u16, PortCard> = HashMap::new();
-        let mut skeleton_map: HashMap<u16, PortCard> = HashMap::new();
-        let mut to_probe: Vec<Listener> = Vec::new();
+        let mut to_probe: Vec<(Listener, ProcInfo)> = Vec::new();
         for (l, proc) in pairs {
             let key = CacheKey::from(&l);
             if let Some(card) = self.cache.get(&key) {
                 new_map.insert(l.port, card.clone());
-                skeleton_map.insert(l.port, card.clone());
             } else {
-                skeleton_map.insert(
+                new_map.insert(
                     l.port,
                     PortCard::pending(l.port, l.pid, l.command.clone(), &proc),
                 );
-                to_probe.push(l);
+                to_probe.push((l, proc));
             }
         }
         let new_count = to_probe.len();
-        let cached_count = new_map.len();
+        let cached_count = new_map.len() - new_count;
 
-        // Phase 1: emit skeleton for fast first paint. No-op if nothing
-        // is uncached — the cached rows are already the "real" answer.
+        // Phase 1: skeleton with cached rows + pending placeholders.
         if new_count > 0 {
-            self.state.replace_skeleton(skeleton_map).await;
+            self.state.replace_skeleton(new_map.clone()).await;
         }
 
-        // Phase 2: real probes.
-        for card in self.engine.scan(to_probe).await {
+        // Phase 2: stream probe results, broadcasting after each
+        // resolution so consumers see cards fill in piece-by-piece
+        // rather than waiting for the slowest probe to finish.
+        let mut stream = std::pin::pin!(self.engine.scan_streaming_with_procs(to_probe));
+        while let Some(card) = stream.next().await {
             self.cache.insert(
                 CacheKey {
                     port: card.port,
@@ -91,8 +92,13 @@ impl Scheduler {
                 card.clone(),
             );
             new_map.insert(card.port, card);
+            // Still skeleton-state until ALL probes finish — final
+            // emit below carries scan_elapsed_ms.
+            self.state.replace_skeleton(new_map.clone()).await;
         }
 
+        // Phase 3: final emit with cycle timing so consumers can tell
+        // "this is the resolved view" from the streaming intermediates.
         let elapsed_ms = cycle_start.elapsed().as_millis().min(u32::MAX as u128) as u32;
         self.state.replace(new_map, Some(elapsed_ms)).await;
         if new_count > 0 {

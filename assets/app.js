@@ -105,13 +105,20 @@ function buildPasteReport(c) {
 
 function fillCard(node, c) {
   node.href = c.url;
-  node.className = `card kind-${c.kind}`;
+  const pending = isPending(c);
+  // Pending rows get their own class so CSS can render them neutral
+  // (not red) — they're a transient skeleton, not a failure.
+  node.className = `card kind-${pending ? "pending" : c.kind}`;
   node.querySelector(".port").textContent = `:${c.port}`;
   const badge = node.querySelector(".kind-badge");
-  if (c.kind === "live") {
+  if (c.kind === "live" && !pending) {
     badge.style.display = "none";
     badge.className = "kind-badge";
     badge.textContent = "";
+  } else if (pending) {
+    badge.style.display = "";
+    badge.textContent = "probing…";
+    badge.className = "kind-badge badge-pending";
   } else {
     badge.style.display = "";
     badge.textContent = c.reason || c.kind;
@@ -134,10 +141,33 @@ function attachDiagHandlers(node, getCard) {
   }
 }
 
+function isPending(p) {
+  // Skeleton placeholder: kind=dead but no probe has happened yet.
+  return p.reason === "probing…" && (p.attempts ?? 0) === 0;
+}
+
+function emptyMessage(snapshot, tab) {
+  const all = snapshot.ports || [];
+  const scanned = snapshot.scan_elapsed_ms != null;
+  if (all.length === 0) {
+    return scanned
+      ? "No listening ports detected on this host."
+      : "Probing…";
+  }
+  // We're on a tab that filters everything out.
+  if (tab === "live") return "No live HTTP services right now.";
+  return "No matching ports.";
+}
+
 function render(snapshot) {
   lastSnapshot = snapshot;
   const all = snapshot.ports || [];
-  const ports = currentTab === "live" ? all.filter((p) => p.kind === "live") : all;
+  // Live tab includes pending rows so the user sees the skeleton on
+  // first paint instead of a misleading "nothing here" message during
+  // the probe window.
+  const ports = currentTab === "live"
+    ? all.filter((p) => p.kind === "live" || isPending(p))
+    : all;
 
   const liveCount = all.filter((p) => p.kind === "live").length;
   countEl.textContent = `${liveCount} live · ${all.length} total`;
@@ -150,9 +180,7 @@ function render(snapshot) {
       emptyEl.className = "empty";
       grid.appendChild(emptyEl);
     }
-    emptyEl.textContent = currentTab === "live"
-      ? "No HTTP services discovered yet."
-      : "No listening ports detected.";
+    emptyEl.textContent = emptyMessage(snapshot, currentTab);
     return;
   }
   if (emptyEl) { emptyEl.remove(); emptyEl = null; }
@@ -165,7 +193,8 @@ function render(snapshot) {
     if (!entry) {
       const el = tpl.content.firstElementChild.cloneNode(true);
       el.addEventListener("click", (e) => {
-        if (!el.classList.contains("kind-live")) { e.preventDefault(); return; }
+        const card = nodes.get(c.port)?.card ?? c;
+        if (card.kind !== "live" || isPending(card)) { e.preventDefault(); return; }
         e.preventDefault();
         window.open(el.href, `portbook-${c.port}`);
       });

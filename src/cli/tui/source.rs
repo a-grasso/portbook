@@ -7,9 +7,9 @@
 use crate::BIND_ADDR;
 use crate::engine::Engine;
 use crate::state::{PortCard, Snapshot};
+use futures::StreamExt;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Sender;
-use tokio_stream::StreamExt;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
 
@@ -101,40 +101,61 @@ async fn poll_loop(tx: Sender<Snapshot>) {
     }
 }
 
-/// One scan cycle. Optionally emits a skeleton frame first.
+/// One scan cycle. Emits a skeleton snapshot, then an incremental
+/// snapshot per probe completion, then a final snapshot carrying
+/// `scan_elapsed_ms` so the TUI can stop saying "probing…".
 async fn scan_cycle(
     engine: &Engine,
     tx: &Sender<Snapshot>,
     with_skeleton: bool,
 ) -> Result<(), ()> {
-    if with_skeleton
-        && let Ok(pairs) = engine.enumerate_with_procs()
-    {
-        let ports: Vec<PortCard> = pairs
-            .into_iter()
-            .map(|(l, proc)| PortCard::pending(l.port, l.pid, l.command, &proc))
-            .collect();
-        // Skeleton has no scan timing — probes haven't run yet.
-        if tx
-            .send(Snapshot { ports, scan_elapsed_ms: None })
-            .await
-            .is_err()
-        {
-            return Err(());
-        }
-    }
     let start = Instant::now();
-    let ports = match engine.scan_all().await {
+    let pairs = match engine.enumerate_with_procs() {
         Ok(p) => p,
         Err(_) => return Ok(()),
     };
+
+    // Build initial map of pending placeholders.
+    let mut map: std::collections::HashMap<u16, PortCard> = pairs
+        .iter()
+        .map(|(l, proc)| {
+            (
+                l.port,
+                PortCard::pending(l.port, l.pid, l.command.clone(), proc),
+            )
+        })
+        .collect();
+
+    if with_skeleton {
+        let snap = build_snap(&map, None);
+        if tx.send(snap).await.is_err() {
+            return Err(());
+        }
+    }
+
+    // Stream probe results, broadcasting after each.
+    let mut stream = std::pin::pin!(engine.scan_streaming_with_procs(pairs));
+    while let Some(card) = stream.next().await {
+        map.insert(card.port, card);
+        // Intermediate snapshots stay skeleton-flagged (no timing) so
+        // the TUI footer keeps saying "probing…" until the cycle ends.
+        if tx.send(build_snap(&map, None)).await.is_err() {
+            return Err(());
+        }
+    }
+
     let elapsed_ms = start.elapsed().as_millis().min(u32::MAX as u128) as u32;
-    if tx
-        .send(Snapshot { ports, scan_elapsed_ms: Some(elapsed_ms) })
-        .await
-        .is_err()
-    {
+    if tx.send(build_snap(&map, Some(elapsed_ms))).await.is_err() {
         return Err(());
     }
     Ok(())
+}
+
+fn build_snap(
+    map: &std::collections::HashMap<u16, PortCard>,
+    scan_elapsed_ms: Option<u32>,
+) -> Snapshot {
+    let mut ports: Vec<PortCard> = map.values().cloned().collect();
+    ports.sort_by_key(|c| c.port);
+    Snapshot { ports, scan_elapsed_ms }
 }
