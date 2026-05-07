@@ -116,7 +116,11 @@ portbook watch --json | jq -c '.ports | map(.port)'
       "elapsed_ms":     12,                   // wall time of the probe
       "error_class":    null,                 // "timeout" | "connect" | "decode" | "body" | "other"
       "error_detail":   null,                 // truncated underlying error message
-      "attempts":       1                     // 1, or 2 if a transient error triggered a retry
+      "attempts":       1,                    // 1, or 2 if a transient error triggered a retry
+      "pending":        false                 // true on skeleton placeholders (probe in flight);
+                                              // omitted when false. Pre-v0.1.7 snapshots lack
+                                              // this field — recognize skeletons by reason="probing…"
+                                              // + attempts=0 if interoperating with older daemons.
     }
   ],
 
