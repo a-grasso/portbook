@@ -2,7 +2,10 @@
 //!
 //! Tries the running daemon's SSE endpoint first (`/api/stream`). If
 //! that fails, falls back to polling the local Engine on a 3s tick.
-//! Either way, snapshots flow into the TUI through one mpsc channel.
+//! Snapshots flow into the TUI through a `watch` channel — the renderer
+//! only ever cares about the latest state, so coalescing intermediate
+//! frames under load is the right behavior. The producer never blocks
+//! on a slow renderer.
 
 use crate::BIND_ADDR;
 use crate::discovery::Listener;
@@ -11,7 +14,7 @@ use crate::state::{PortCard, Snapshot};
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::watch::Sender;
 
 /// Defensive cap on the SSE accumulation buffer. Local daemon traffic
 /// is trusted, but a malformed event with no `\n\n` boundary would
@@ -70,7 +73,7 @@ async fn try_sse(tx: Sender<Snapshot>) -> bool {
                 Err(_) => break,
             };
             for snap in parser.feed(&bytes) {
-                if tx.send(snap).await.is_err() {
+                if tx.send(snap).is_err() {
                     return;
                 }
             }
@@ -204,18 +207,18 @@ async fn run_one_cycle(
         match event {
             CycleEvent::Skeleton(skel) => {
                 map = skel;
-                if with_skeleton && tx.send(build_snap(&map, None)).await.is_err() {
+                if with_skeleton && tx.send(build_snap(&map, None)).is_err() {
                     return CycleOutcome::ChannelClosed;
                 }
             }
             CycleEvent::Resolved(card) => {
                 map.insert(card.port, *card);
-                if tx.send(build_snap(&map, None)).await.is_err() {
+                if tx.send(build_snap(&map, None)).is_err() {
                     return CycleOutcome::ChannelClosed;
                 }
             }
             CycleEvent::Done { elapsed_ms } => {
-                if tx.send(build_snap(&map, Some(elapsed_ms))).await.is_err() {
+                if tx.send(build_snap(&map, Some(elapsed_ms))).is_err() {
                     return CycleOutcome::ChannelClosed;
                 }
             }
