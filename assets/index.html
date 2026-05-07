@@ -34,9 +34,9 @@
       <button type="button" class="diag-toggle">diagnostics</button>
     </a>
   </template>
-  <div id="diag-pop" popover class="diag-pop">
+  <div id="diag-pop" popover class="diag-pop" role="dialog" aria-labelledby="diag-pop-title">
     <header class="diag-pop-head">
-      <span class="diag-pop-title"></span>
+      <span id="diag-pop-title" class="diag-pop-title"></span>
       <button type="button" class="diag-pop-close" aria-label="close">×</button>
     </header>
     <dl class="diag-grid"></dl>
