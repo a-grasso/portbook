@@ -50,9 +50,14 @@ const DIAG_FIELDS = [
   ["probed at",    (c) => fmtTimestamp(c.probed_at_unix)],
 ];
 
-function renderDiag(node, c) {
-  const dl = node.querySelector(".diag-grid");
-  if (!dl) return;
+const diagPop = document.getElementById("diag-pop");
+const diagPopTitle = diagPop?.querySelector(".diag-pop-title");
+const diagPopGrid = diagPop?.querySelector(".diag-grid");
+const diagPopCopy = diagPop?.querySelector(".diag-copy");
+const diagPopClose = diagPop?.querySelector(".diag-pop-close");
+let diagPopCard = null;
+
+function renderDiagInto(dl, c) {
   dl.innerHTML = "";
   for (const [label, get] of DIAG_FIELDS) {
     const dt = document.createElement("dt");
@@ -61,6 +66,32 @@ function renderDiag(node, c) {
     dd.textContent = String(get(c));
     dl.append(dt, dd);
   }
+}
+
+function openDiagPop(c) {
+  if (!diagPop) return;
+  diagPopCard = c;
+  if (diagPopTitle) diagPopTitle.textContent = `:${c.port} · ${c.project_name || c.title || c.kind}`;
+  if (diagPopGrid) renderDiagInto(diagPopGrid, c);
+  if (diagPopCopy) diagPopCopy.textContent = "copy paste-ready report";
+  diagPop.showPopover();
+}
+
+if (diagPopClose) {
+  diagPopClose.addEventListener("click", () => diagPop.hidePopover());
+}
+if (diagPopCopy) {
+  diagPopCopy.addEventListener("click", async () => {
+    if (!diagPopCard) return;
+    const text = buildPasteReport(diagPopCard);
+    try {
+      await navigator.clipboard.writeText(text);
+      diagPopCopy.textContent = "copied";
+      setTimeout(() => { diagPopCopy.textContent = "copy paste-ready report"; }, 1200);
+    } catch (_) {
+      diagPopCopy.textContent = "copy failed";
+    }
+  });
 }
 
 function buildPasteReport(c) {
@@ -90,28 +121,15 @@ function fillCard(node, c) {
   node.querySelector(".title").textContent = c.title || "";
   node.querySelector(".desc").textContent = c.description || "";
   node.querySelector(".cmd").textContent = c.cmdline || c.command || "";
-  renderDiag(node, c);
 }
 
 function attachDiagHandlers(node, getCard) {
-  const details = node.querySelector(".diag");
-  if (details) {
-    details.addEventListener("click", (e) => e.stopPropagation());
-  }
-  const btn = node.querySelector(".diag-copy");
+  const btn = node.querySelector(".diag-toggle");
   if (btn) {
-    btn.addEventListener("click", async (e) => {
+    btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const text = buildPasteReport(getCard());
-      try {
-        await navigator.clipboard.writeText(text);
-        const original = btn.textContent;
-        btn.textContent = "copied";
-        setTimeout(() => { btn.textContent = original; }, 1200);
-      } catch (_) {
-        btn.textContent = "copy failed";
-      }
+      openDiagPop(getCard());
     });
   }
 }
