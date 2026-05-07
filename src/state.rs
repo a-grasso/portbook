@@ -26,6 +26,14 @@ pub struct PortCard {
     pub error_class: Option<ProbeError>,
     pub error_detail: Option<String>,
     pub attempts: u8,
+    /// True when this card is a skeleton placeholder (enumeration only,
+    /// probe still in flight). Cross-FFI consumers (web UI, agents) read
+    /// this directly instead of pattern-matching on the human-facing
+    /// `reason` string. Omitted when false to keep the wire format compact
+    /// and to preserve backward compatibility with pre-v0.1.7 consumers
+    /// that don't expect the field.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending: bool,
 }
 
 impl PortCard {
@@ -52,6 +60,7 @@ impl PortCard {
             error_class: probe.error_class,
             error_detail: probe.error_detail.clone(),
             attempts: probe.attempts,
+            pending: false,
         }
     }
 }
@@ -114,13 +123,19 @@ impl PortCard {
             error_class: None,
             error_detail: None,
             attempts: 0,
+            pending: true,
         }
     }
 
     /// True when this card is a skeleton placeholder rather than a
-    /// fully-probed result. See [`PortCard::pending`].
+    /// fully-probed result. See [`PortCard::pending`]. Reads the
+    /// explicit `pending` flag — pre-v0.1.7 snapshots that lack the
+    /// field but carry the historical "probing…" reason and zero
+    /// attempts are still recognized as pending so deserialized old
+    /// snapshots round-trip correctly.
     pub fn is_pending(&self) -> bool {
-        self.attempts == 0 && self.reason.as_deref() == Some(PENDING_REASON)
+        self.pending
+            || (self.attempts == 0 && self.reason.as_deref() == Some(PENDING_REASON))
     }
 }
 
@@ -198,5 +213,58 @@ impl AppState {
 
     pub fn subscribe(&self) -> broadcast::Receiver<Snapshot> {
         self.tx.subscribe()
+    }
+}
+
+#[cfg(test)]
+mod pending_field_tests {
+    use super::*;
+
+    #[test]
+    fn pending_card_serializes_with_pending_true() {
+        let card = PortCard::pending(8080, 1, "x".into(), &ProcInfo::default());
+        let json = serde_json::to_string(&card).unwrap();
+        assert!(json.contains("\"pending\":true"), "expected pending:true in {json}");
+    }
+
+    #[test]
+    fn resolved_card_omits_pending_field() {
+        // `pending: false` is the default and is skipped when serializing
+        // to keep wire payloads compact and preserve backward compat with
+        // pre-v0.1.7 consumers that don't expect the field.
+        let probe = ProbeResult {
+            kind: ProbeKind::Live,
+            status: Some(200),
+            title: None,
+            description: None,
+            reason: None,
+            probed_url: "http://127.0.0.1:8080/".into(),
+            probed_at_unix: 0,
+            elapsed_ms: 1,
+            error_class: None,
+            error_detail: None,
+            attempts: 1,
+        };
+        let card = PortCard::build(8080, 1, "x".into(), &ProcInfo::default(), &probe);
+        let json = serde_json::to_string(&card).unwrap();
+        assert!(!json.contains("\"pending\""), "pending=false should be skipped: {json}");
+    }
+
+    #[test]
+    fn legacy_snapshot_without_pending_field_still_recognized() {
+        // Pre-v0.1.7 daemons emit the historical "probing…" reason and
+        // attempts=0 but no `pending` field. Deserialized into the new
+        // struct, is_pending() must still return true so consumers behave
+        // correctly during a rolling upgrade.
+        let legacy = r#"{
+            "port":8080,"pid":1,"command":"x","url":"http://localhost:8080",
+            "kind":"dead","reason":"probing…","title":null,"description":null,
+            "project_root":null,"project_name":null,"cwd":null,"cmdline":null,
+            "status":null,"probed_url":null,"probed_at_unix":null,"elapsed_ms":null,
+            "error_class":null,"error_detail":null,"attempts":0
+        }"#;
+        let card: PortCard = serde_json::from_str(legacy).unwrap();
+        assert!(!card.pending, "field defaults to false when missing");
+        assert!(card.is_pending(), "legacy reason+attempts heuristic still applies");
     }
 }

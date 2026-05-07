@@ -323,6 +323,7 @@ mod cycle_tests {
                     error_class: None,
                     error_detail: None,
                     attempts: 1,
+                    pending: false,
                 })
             }
             fn insert(&mut self, _c: &PortCard) {}

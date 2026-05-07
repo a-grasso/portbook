@@ -142,7 +142,10 @@ function attachDiagHandlers(node, getCard) {
 }
 
 function isPending(p) {
-  // Skeleton placeholder: kind=dead but no probe has happened yet.
+  // Prefer the explicit `pending` flag (v0.1.7+). Fall back to the
+  // historical reason+attempts heuristic so older daemons still render
+  // skeleton rows correctly during a rolling upgrade.
+  if (p.pending === true) return true;
   return p.reason === "probing…" && (p.attempts ?? 0) === 0;
 }
 
