@@ -85,28 +85,43 @@ async fn try_sse(tx: Sender<Snapshot>) -> bool {
 
 async fn poll_loop(tx: Sender<Snapshot>) {
     let engine = Engine::new();
-    // First cycle: progressive. Skeleton (enumerate-only, ~100ms) lands
-    // on screen instantly; the full probed snapshot replaces it once
-    // probes finish (could be up to 5s for a dead port retry chain).
-    if scan_cycle(&engine, &tx, true).await.is_err() {
+    // `last_complete` holds the previous cycle's resolved cards so
+    // re-probes on subsequent cycles render the prior view (live/error/
+    // dead, complete with title and probe metadata) instead of flashing
+    // back to "probing…" every 3 seconds. Only first-time-seen ports
+    // ever appear as pending placeholders.
+    let mut last_complete: std::collections::HashMap<u16, PortCard> =
+        std::collections::HashMap::new();
+
+    if scan_cycle(&engine, &tx, &mut last_complete, true).await.is_err() {
         return;
     }
     let mut ticker = tokio::time::interval(POLL_INTERVAL);
     ticker.tick().await; // discard immediate first tick
     loop {
         ticker.tick().await;
-        if scan_cycle(&engine, &tx, false).await.is_err() {
+        if scan_cycle(&engine, &tx, &mut last_complete, false)
+            .await
+            .is_err()
+        {
             break;
         }
     }
 }
 
-/// One scan cycle. Emits a skeleton snapshot, then an incremental
-/// snapshot per probe completion, then a final snapshot carrying
-/// `scan_elapsed_ms` so the TUI can stop saying "probing…".
+/// One scan cycle. Emits a skeleton snapshot (only when uncached ports
+/// exist — typically just first-paint or when a brand-new listener
+/// appears), an incremental snapshot per probe completion, then a
+/// final snapshot carrying `scan_elapsed_ms` so the TUI footer can
+/// stop saying "probing…".
+///
+/// On cycles after the first, known ports show their last resolved
+/// state during re-probe — only newly-discovered ports render as
+/// pending. This matches the daemon's caching behavior.
 async fn scan_cycle(
     engine: &Engine,
     tx: &Sender<Snapshot>,
+    last_complete: &mut std::collections::HashMap<u16, PortCard>,
     with_skeleton: bool,
 ) -> Result<(), ()> {
     let start = Instant::now();
@@ -115,18 +130,21 @@ async fn scan_cycle(
         Err(_) => return Ok(()),
     };
 
-    // Build initial map of pending placeholders.
+    // Seed the working map: known ports inherit their last resolved
+    // result; unknown ports get a pending placeholder.
     let mut map: std::collections::HashMap<u16, PortCard> = pairs
         .iter()
         .map(|(l, proc)| {
-            (
-                l.port,
-                PortCard::pending(l.port, l.pid, l.command.clone(), proc),
-            )
+            let card = match last_complete.get(&l.port) {
+                Some(prev) => prev.clone(),
+                None => PortCard::pending(l.port, l.pid, l.command.clone(), proc),
+            };
+            (l.port, card)
         })
         .collect();
 
-    if with_skeleton {
+    let any_pending = map.values().any(|c| c.is_pending());
+    if with_skeleton && any_pending {
         let snap = build_snap(&map, None);
         if tx.send(snap).await.is_err() {
             return Err(());
@@ -143,6 +161,10 @@ async fn scan_cycle(
             return Err(());
         }
     }
+
+    // Remember the resolved cards for the next cycle. Vanished ports
+    // are naturally forgotten because we rebuild fresh from `pairs`.
+    *last_complete = map.clone();
 
     let elapsed_ms = start.elapsed().as_millis().min(u32::MAX as u128) as u32;
     if tx.send(build_snap(&map, Some(elapsed_ms))).await.is_err() {
