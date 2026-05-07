@@ -89,12 +89,26 @@ artifacts and creates a GitHub Release using the matching section of
 
 ### Cutting a release
 
-1. **Land all work on `main`** with conventional-commit messages.
-2. **Bump `version`** in [Cargo.toml](Cargo.toml).
-3. **Refresh the lockfile**: `cargo build`.
-4. **Regenerate the changelog**: `git cliff --tag vX.Y.Z -o CHANGELOG.md`.
-5. **Commit**: `git commit -am "chore(release): vX.Y.Z"`.
-6. **Tag and push**: `git tag -a vX.Y.Z -m "vX.Y.Z" && git push --follow-tags`.
+Land all work on `main` with conventional-commit messages, then:
+
+```sh
+just release X.Y.Z
+```
+
+The recipe in [Justfile](Justfile) is the canonical release flow.
+It pre-flights branch/cleanliness/sync, bumps `version` in
+`Cargo.toml`, refreshes `Cargo.lock`, regenerates `CHANGELOG.md` via
+`git cliff`, commits as `chore(release): vX.Y.Z`, creates the
+annotated tag, and pushes with `--follow-tags`.
+
+If you need to run the steps by hand (recipe broken, partial release,
+etc.), the equivalent commands are:
+
+1. Bump `version` in [Cargo.toml](Cargo.toml).
+2. Refresh the lockfile: `cargo build`.
+3. Regenerate the changelog: `git cliff --tag vX.Y.Z -o CHANGELOG.md`.
+4. Commit: `git commit -am "chore(release): vX.Y.Z"`.
+5. Tag and push: `git tag -a vX.Y.Z -m "vX.Y.Z" && git push --follow-tags`.
    The annotated `-a` tag is required for `--follow-tags` to ship it;
    lightweight tags stay local.
 
@@ -105,7 +119,7 @@ message (or add a follow-up commit) and regenerate.
 ### Previewing release notes
 
 ```
-git cliff --unreleased --tag vX.Y.Z
+just release-preview X.Y.Z
 ```
 
 This prints what the release body will look like without writing the
