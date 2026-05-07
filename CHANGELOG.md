@@ -4,11 +4,29 @@ All notable changes to portbook are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.6] - 2026-05-07
+
+### Build
+
+- Add `just release` recipe for tagged releases
+
+### Documentation
+
+- Require annotated tags in release flow
+
+### Features
+
+- Per-port diagnostics, explain subcommand, retry + timeout
+
 ## [0.1.5] - 2026-05-06
 
 ### Build
 
 - Add cliff.toml for git-cliff changelog generation
+
+### Chores
+
+- V0.1.5
 
 ### Documentation
 
