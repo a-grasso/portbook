@@ -19,8 +19,11 @@ use ratatui::backend::CrosstermBackend;
 use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
-/// Exit code when stdout isn't a tty — TUI can't run.
-pub const EXIT_NOT_A_TTY: i32 = 1;
+/// Returned by `portbook tui` when stdout isn't a tty so the caller
+/// can distinguish "wrong environment" from a generic runtime failure
+/// (which exits 1 via `anyhow`). Documented in the README exit-codes
+/// table. Coexists with `EXIT_PORT_NOT_FOUND = 3` from `explain`.
+pub const EXIT_NOT_A_TTY: i32 = 4;
 
 pub async fn run_tui() -> anyhow::Result<i32> {
     if !io::stdout().is_terminal() {

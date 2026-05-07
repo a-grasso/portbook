@@ -144,6 +144,7 @@ applied for `/api/ports`, `/api/stream`, `ls`, and `watch`.
 - `1` — runtime error (scan failed, daemon refused connection, etc.)
 - `2` — CLI misuse (unknown flag, bad value); emitted by clap
 - `3` — `portbook explain <port>`: the requested port isn't currently listening
+- `4` — `portbook tui`: stdout isn't a tty (e.g. piped or redirected)
 
 ## Platform support
 
