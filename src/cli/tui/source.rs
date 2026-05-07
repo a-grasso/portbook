@@ -164,7 +164,7 @@ async fn poll_loop(tx: Sender<Snapshot>) {
     }
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 enum CycleOutcome {
     Continue,
     ChannelClosed,
@@ -206,8 +206,20 @@ async fn run_one_cycle(
     while let Some(event) = events.next().await {
         match event {
             CycleEvent::Skeleton(skel) => {
+                // Always seed the working map from the engine's view
+                // — the all-cached cycle yields no Resolved events,
+                // so without this the final Done would send an empty
+                // snapshot and the UI would flash to "no listeners".
                 map = skel;
-                if with_skeleton && tx.send(build_snap(&map, None)).is_err() {
+                let any_pending = map.values().any(|c| c.is_pending());
+                // Only forward a skeleton frame when there's something
+                // to actually show as "probing…" — otherwise we'd
+                // briefly clear scan_elapsed_ms on every all-cached
+                // cycle and the footer would flicker.
+                if with_skeleton
+                    && any_pending
+                    && tx.send(build_snap(&map, None)).is_err()
+                {
                     return CycleOutcome::ChannelClosed;
                 }
             }
@@ -231,6 +243,94 @@ fn build_snap(map: &HashMap<u16, PortCard>, scan_elapsed_ms: Option<u32>) -> Sna
     let mut ports: Vec<PortCard> = map.values().cloned().collect();
     ports.sort_by_key(|c| c.port);
     Snapshot { ports, scan_elapsed_ms }
+}
+
+#[cfg(test)]
+mod cycle_tests {
+    //! Regression coverage for the producer/consumer integration —
+    //! engine emits + TUI consumes. The original V1 refactor missed
+    //! this because the engine contract was tested in isolation:
+    //! when an all-cached cycle yielded only `Done` (no Skeleton, no
+    //! Resolved), the TUI's per-cycle map stayed empty and the
+    //! renderer flashed to "No listeners detected yet" on every
+    //! re-probe tick. These tests drive `run_one_cycle` end-to-end so
+    //! that bug stays dead.
+
+    use super::*;
+    use crate::discovery::PortEnumerator;
+    use crate::engine::Engine;
+    use crate::probe::Prober;
+    use crate::process::ProcessInspector;
+
+    struct FakeEnum(Vec<Listener>);
+    impl PortEnumerator for FakeEnum {
+        fn list(&self) -> anyhow::Result<Vec<Listener>> { Ok(self.0.clone()) }
+    }
+    struct FakeProcs;
+    impl ProcessInspector for FakeProcs {
+        fn inspect(&self, _pid: u32) -> crate::process::ProcInfo {
+            crate::process::ProcInfo::default()
+        }
+    }
+
+    fn ports() -> Vec<Listener> {
+        vec![
+            Listener { port: 50901, pid: 1, command: "a".into() },
+            Listener { port: 50902, pid: 2, command: "b".into() },
+        ]
+    }
+
+    /// Drives `run_one_cycle` twice and collects everything sent to
+    /// the watch channel. The second cycle is the regression case:
+    /// every listener is in the cache, so the engine yields only
+    /// Skeleton + Done. The TUI must still send a non-empty snapshot.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn second_cycle_sends_non_empty_snapshot_when_all_cached() {
+        let engine = Engine::with_deps(
+            Box::new(FakeEnum(ports())),
+            Box::new(FakeProcs),
+            Prober::new(),
+        );
+        let mut cache = TuiCache::default();
+
+        let initial = Snapshot { ports: Vec::new(), scan_elapsed_ms: None };
+        let (tx, mut rx) = tokio::sync::watch::channel(initial);
+        // Mark the initial empty value as already-seen so `changed()`
+        // only reports real cycle output below.
+        let _ = rx.borrow_and_update();
+
+        // Cycle 1: empty cache → Skeleton(pending) + Resolved×N + Done.
+        // Populates the cache for cycle 2.
+        assert_eq!(
+            run_one_cycle(&engine, &tx, &mut cache, true).await,
+            CycleOutcome::Continue,
+        );
+
+        // Cycle 2: cache is now full, nothing to probe. Engine yields
+        // Skeleton(cached map) + Done. The TUI must still wire that
+        // map into the final snapshot.
+        assert_eq!(
+            run_one_cycle(&engine, &tx, &mut cache, false).await,
+            CycleOutcome::Continue,
+        );
+
+        // The final snapshot the receiver sees after both cycles must
+        // be the resolved cycle 2 view: 2 cards, scan_elapsed_ms set.
+        let snap = rx.borrow_and_update().clone();
+        assert_eq!(
+            snap.ports.len(),
+            2,
+            "snapshot from all-cached cycle must carry both cached cards, got {snap:?}",
+        );
+        assert!(
+            snap.scan_elapsed_ms.is_some(),
+            "all-cached cycle is still a resolved cycle — scan_elapsed_ms must be set",
+        );
+        assert!(
+            !snap.ports.iter().any(|c| c.is_pending()),
+            "no pending cards expected in an all-cached cycle",
+        );
+    }
 }
 
 #[cfg(test)]

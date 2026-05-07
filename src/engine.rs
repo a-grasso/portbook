@@ -162,9 +162,12 @@ impl Engine {
                 }
             }
 
-            if map.values().any(|c| c.is_pending()) {
-                yield CycleEvent::Skeleton(map.clone());
-            }
+            // Always emit the initial map so consumers that build their
+            // working state per-cycle (e.g. the TUI) see what the engine
+            // started with even when nothing needs re-probing. Whether
+            // to broadcast/send a skeleton frame to the user is the
+            // consumer's call (gate on `any pending`).
+            yield CycleEvent::Skeleton(map.clone());
 
             let mut stream = std::pin::pin!(self.scan_stream(to_probe));
             while let Some(card) = stream.next().await {
@@ -201,8 +204,12 @@ pub trait CycleCache {
 /// Producer events from [`Engine::run_cycle`]. Consumers map these to
 /// their own sink (broadcast snapshot, mpsc, etc.).
 pub enum CycleEvent {
-    /// Initial frame: cached cards plus pending placeholders. Emitted
-    /// only when at least one card is pending.
+    /// Initial frame: cached cards plus pending placeholders. Always
+    /// emitted at cycle start — even when nothing needs probing — so
+    /// consumers that rebuild their working state per cycle see the
+    /// engine's starting map. Consumers that want to gate UI output
+    /// on "is anything actually pending?" should check the map
+    /// themselves before broadcasting/forwarding.
     Skeleton(HashMap<u16, PortCard>),
     /// One card just finished probing. Boxed because `PortCard` is
     /// large (~300B) and dwarfs the other variants.
@@ -297,7 +304,7 @@ mod cycle_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn run_cycle_skips_skeleton_when_all_cached() {
+    async fn run_cycle_emits_skeleton_with_cached_map_when_nothing_to_probe() {
         // Cache that returns a fully-resolved card for every listener —
         // no pending placeholders, so Skeleton must not be emitted.
         struct FullCache;
@@ -339,9 +346,18 @@ mod cycle_tests {
         let stream = engine.run_cycle(&mut cache);
         let events: Vec<CycleEvent> = futures::StreamExt::collect(Box::pin(stream)).await;
 
+        // Skeleton always fires now (carrying the cached map) so
+        // consumers can rebuild their working state per cycle. No
+        // Resolved events because nothing was probed.
+        let skeletons: Vec<&HashMap<u16, PortCard>> = events
+            .iter()
+            .filter_map(|e| if let CycleEvent::Skeleton(m) = e { Some(m) } else { None })
+            .collect();
+        assert_eq!(skeletons.len(), 1, "exactly one Skeleton expected");
+        assert_eq!(skeletons[0].len(), 2, "skeleton must carry both cached cards");
         assert!(
-            !events.iter().any(|e| matches!(e, CycleEvent::Skeleton(_))),
-            "no Skeleton expected when all cards are cached"
+            skeletons[0].values().all(|c| !c.is_pending()),
+            "cached cards stay non-pending in the all-cached skeleton"
         );
         assert!(
             !events.iter().any(|e| matches!(e, CycleEvent::Resolved(_))),
