@@ -26,6 +26,7 @@ portbook watch --json | jq …   # streaming JSON for agents and scripts
 - Three interchangeable surfaces over the same data:
   - **Web UI** at `http://localhost:7777` with live updates via SSE
   - **`portbook ls`** — grouped, colored terminal list (great for `tmux`)
+  - **`portbook tui`** — interactive terminal app: live updates, filter, expand row to see diagnostics, Enter to open in browser
   - **`portbook watch [--json]`** — streaming snapshots for agents and scripts
 - Stable JSON schema (`/api/ports`, `ls --json`, `watch --json`) — same shape everywhere
 - Cmdline secret redaction at the API boundary (tokens, passwords, URLs with userinfo)
@@ -60,6 +61,7 @@ portbook ls --all              # also show dead ports (collapsed by default)
 portbook ls --json             # one JSON snapshot, machine-readable
 portbook watch --json          # stream JSON snapshots on a 3s interval
 portbook watch --interval 5    # custom polling interval (seconds)
+portbook tui                   # interactive terminal UI (live, filter, expand, open)
 portbook explain 3000          # diagnostic block for a single port (paste into issues)
 portbook explain 3000 --json   # same data as a single JSON object
 portbook completions zsh       # shell completion script (bash, zsh, fish, …)

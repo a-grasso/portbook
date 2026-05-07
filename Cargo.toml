@@ -15,7 +15,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.5", features = ["trace"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 scraper = "0.20"
 rust-embed = "8"
 mime_guess = "2"
@@ -28,6 +28,8 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 terminal_size = "0.4"
 anstyle = "1"
+ratatui = "0.28"
+crossterm = { version = "0.28", features = ["event-stream"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

@@ -1,0 +1,111 @@
+//! `portbook tui` — interactive terminal view over the same Engine that
+//! powers `ls` and the web UI. Connects to a running daemon's SSE stream
+//! when available, otherwise polls the local Engine on a 3s tick.
+//!
+//! Layout decision: expand-in-place rows (k9s / `gh` style) — works at
+//! any terminal width. See `app::App` for state, `ui::render` for the
+//! pure render function. No engine logic lives here.
+
+mod app;
+mod source;
+mod ui;
+
+use app::App;
+use crossterm::event::{Event, EventStream, KeyEventKind};
+use crossterm::{execute, terminal};
+use futures::StreamExt;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use std::io::{self, IsTerminal, Write};
+use std::time::Duration;
+
+/// Exit code when stdout isn't a tty — TUI can't run.
+pub const EXIT_NOT_A_TTY: i32 = 1;
+
+pub async fn run_tui() -> anyhow::Result<i32> {
+    if !io::stdout().is_terminal() {
+        eprintln!(
+            "portbook tui requires an interactive terminal.\n\
+             Try `portbook ls` for piping or scripting."
+        );
+        return Ok(EXIT_NOT_A_TTY);
+    }
+
+    let source_label = if source::daemon_alive().await {
+        "daemon"
+    } else {
+        "polling"
+    };
+    let mut app = App::new(source_label);
+
+    let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel(8);
+    source::spawn(snap_tx);
+
+    terminal::enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, terminal::EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut term = Terminal::new(backend)?;
+
+    let mut events = EventStream::new();
+    let res = run_loop(&mut term, &mut app, &mut events, &mut snap_rx).await;
+
+    terminal::disable_raw_mode().ok();
+    execute!(term.backend_mut(), terminal::LeaveAlternateScreen).ok();
+    term.show_cursor().ok();
+    let _ = io::stdout().flush();
+
+    res.map(|_| 0)
+}
+
+async fn run_loop<B: ratatui::backend::Backend>(
+    term: &mut Terminal<B>,
+    app: &mut App,
+    events: &mut EventStream,
+    snap_rx: &mut tokio::sync::mpsc::Receiver<crate::state::Snapshot>,
+) -> anyhow::Result<()> {
+    term.draw(|f| ui::render(f, app))?;
+    let mut redraw_tick = tokio::time::interval(Duration::from_millis(500));
+    redraw_tick.tick().await; // discard first immediate tick
+
+    loop {
+        tokio::select! {
+            Some(ev) = events.next() => {
+                match ev? {
+                    Event::Key(k) if k.kind == KeyEventKind::Press => {
+                        app.handle_key(k);
+                        if app.should_quit { break; }
+                    }
+                    Event::Resize(_, _) => {}
+                    _ => continue,
+                }
+            }
+            Some(snap) = snap_rx.recv() => {
+                app.ingest(snap);
+            }
+            _ = redraw_tick.tick() => {
+                // Periodic redraw lets transient status messages decay
+                // without depending on a key/snap arriving.
+            }
+        }
+        term.draw(|f| ui::render(f, app))?;
+    }
+    Ok(())
+}
+
+/// Spawn the platform's URL opener. macOS uses `open`, Linux `xdg-open`.
+/// Errors are swallowed — the TUI surfaces success/failure via a status
+/// line message, not a panic.
+pub(crate) fn open_in_browser(url: &str) -> bool {
+    let cmd = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(cmd)
+        .arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
+}

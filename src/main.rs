@@ -25,6 +25,8 @@ enum Command {
     Ls(LsArgs),
     /// Stream snapshots on an interval (good for piping to jq).
     Watch(WatchArgs),
+    /// Interactive terminal UI (live updates, filter, expand, open in browser).
+    Tui,
     /// Explain how a single port was classified (paste-ready diagnostic block).
     Explain(ExplainArgs),
     /// Generate shell completion script (e.g. `portbook completions zsh`).
@@ -115,6 +117,13 @@ async fn main() -> anyhow::Result<()> {
     match cmd {
         Command::Ls(args) => portbook::cli::run_ls(args.into()).await,
         Command::Watch(args) => portbook::cli::run_watch(args.into()).await,
+        Command::Tui => {
+            let code = portbook::cli::run_tui().await?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
         Command::Explain(args) => {
             let code = portbook::cli::run_explain(args.into()).await?;
             if code != 0 {
