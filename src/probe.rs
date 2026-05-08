@@ -9,28 +9,20 @@ pub struct ProbeResult {
     pub title: Option<String>,
     pub description: Option<String>,
     pub reason: Option<String>,
-    /// URL the prober actually requested.
     pub probed_url: String,
-    /// Unix seconds at the moment the probe started.
     pub probed_at_unix: u64,
-    /// Wall time from request start to response (or error).
     pub elapsed_ms: u32,
-    /// Coarse classification of the underlying transport error, if any.
     pub error_class: Option<ProbeError>,
-    /// Truncated `Display` of the underlying error — for diagnostics paste.
+    /// Truncated `Display` of the underlying error, for diagnostics paste.
     pub error_detail: Option<String>,
-    /// Number of probe attempts (currently always 1; reserved for future retry).
     pub attempts: u8,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ProbeKind {
-    /// HTTP 2xx/3xx — live, browsable service.
     Live,
-    /// HTTP 4xx/5xx — speaks HTTP but doesn't serve a useful page at /.
     Error,
-    /// Did not respond as HTTP — connection refused, timeout, non-HTTP protocol.
     Dead,
 }
 
@@ -41,9 +33,6 @@ pub enum ProbeError {
     Connect,
     Decode,
     Body,
-    /// Server responded with redirects exceeding our follow limit. The
-    /// host clearly speaks HTTP — surfaced as `Error` (not `Dead`) so
-    /// users see "redirect chain" instead of "not HTTP".
     Redirect,
     Other,
 }
@@ -52,13 +41,11 @@ pub struct Prober {
     client: reqwest::Client,
 }
 
-/// Per-attempt request timeout. Tuned to cover cold dev-server starts
-/// (Next.js dev compiles on first request — sub-3s on most machines).
+/// Per-attempt timeout, sized to cover cold dev-server starts (e.g. Next.js compiles
+/// on first request — sub-3s on most machines).
 const PROBE_TIMEOUT_MS: u64 = 2500;
 
-/// Maximum probe attempts. Retries on transient transport errors only
-/// (timeout, connect refused). Total worst-case ≈ MAX_ATTEMPTS *
-/// PROBE_TIMEOUT_MS — the scheduler tick should comfortably exceed it.
+/// Worst-case ≈ MAX_ATTEMPTS * PROBE_TIMEOUT_MS; must stay below the scheduler tick.
 const MAX_ATTEMPTS: u8 = 2;
 
 impl Default for Prober {
@@ -93,16 +80,13 @@ impl Prober {
                 Ok(r) => break r,
                 Err(e) => {
                     let class = classify_err(&e);
-                    // Only retry transient transport errors. A `Decode`/`Body`
-                    // failure means something non-HTTP is on the socket —
+                    // Decode/Body failures mean something non-HTTP is on the socket —
                     // retrying won't change the answer.
                     let retryable = matches!(class, ProbeError::Timeout | ProbeError::Connect);
                     if !retryable || attempts >= MAX_ATTEMPTS {
                         let elapsed_ms = start.elapsed().as_millis() as u32;
-                        // A redirect-cap error proves the server speaks HTTP —
-                        // classify as Error (not Dead) so users don't see
-                        // "not HTTP" for a working dev server with a long
-                        // redirect chain.
+                        // A redirect-cap error proves the server speaks HTTP, so it
+                        // belongs in Error (not Dead).
                         let kind = match class {
                             ProbeError::Redirect => ProbeKind::Error,
                             _ => ProbeKind::Dead,

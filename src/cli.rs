@@ -31,10 +31,8 @@ pub struct LsOpts {
 pub async fn run_ls(opts: LsOpts) -> anyhow::Result<()> {
     let snapshot = match fetch_from_daemon().await {
         Some(s) => s,
-        // Progress meter is noise for `--json` (machine consumers) and
-        // when stderr isn't a tty (piped/redirected). `one_shot_scan_with_progress`
-        // double-checks the tty itself, but the explicit gate keeps it
-        // off entirely for JSON callers.
+        // Progress meter is noise for `--json` machine consumers; the function
+        // also tty-checks itself but this gate keeps it off entirely for JSON.
         None => one_shot_scan_with_progress(!opts.json).await?,
     };
     let style = Style::resolve(opts.color);
@@ -52,17 +50,14 @@ pub(super) async fn fetch_from_daemon() -> Option<Snapshot> {
         .ok()?;
     let url = format!("http://{BIND_ADDR}/api/ports");
 
-    // First request: bail fast if daemon isn't there.
     let snap = fetch_once(&client, &url).await?;
     if !is_skeleton(&snap) {
         return Some(snap);
     }
 
-    // Daemon is mid-cycle — its current snapshot is a skeleton (probes
-    // in flight). Poll briefly for the resolved version instead of
-    // printing pending rows or redoing the scan locally. The daemon
-    // will emit a full snapshot within probe-wall-time; we cap at 6s
-    // and fall back to None on timeout so the caller does a local scan.
+    // Daemon is mid-cycle (skeleton snapshot). Poll briefly for the resolved
+    // version rather than printing pending rows or redoing the scan locally.
+    // Cap at 6s and fall back to None so the caller can do a local scan.
     let poll = async {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -95,9 +90,8 @@ pub(super) async fn one_shot_scan() -> anyhow::Result<Snapshot> {
     one_shot_scan_with_progress(false).await
 }
 
-/// Local one-shot scan. When `show_progress` is true and stderr is a
-/// tty, prints a single-line `probing… N/M (Xs)` indicator that
-/// updates as probes resolve and is cleared before stdout output.
+/// Local one-shot scan. With `show_progress` and a tty stderr, prints a
+/// single-line `probing… N/M (Xs)` indicator and clears it before stdout output.
 pub(super) async fn one_shot_scan_with_progress(show_progress: bool) -> anyhow::Result<Snapshot> {
     use futures::StreamExt;
     use std::io::IsTerminal;
@@ -130,7 +124,6 @@ pub(super) async fn one_shot_scan_with_progress(show_progress: bool) -> anyhow::
     }
 
     if progress_on {
-        // Clear the progress line so the next stdout write starts clean.
         eprint!("\r\x1b[K");
         let _ = std::io::Write::flush(&mut std::io::stderr());
     }

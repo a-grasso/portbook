@@ -29,9 +29,7 @@ impl Engine {
         )
     }
 
-    /// Construct an engine with explicit dependencies. Used by tests
-    /// to swap in fake enumerator/inspector. Production code should
-    /// use [`Engine::new`].
+    /// Construct with explicit dependencies (test seam for fake enumerator/inspector).
     pub fn with_deps(
         enumerator: Box<dyn PortEnumerator>,
         inspector: Box<dyn ProcessInspector>,
@@ -40,9 +38,7 @@ impl Engine {
         Self { enumerator, inspector, prober }
     }
 
-    /// Enumerate listeners and inspect each owning process — fast.
-    /// Skips probing entirely. Used to paint a TUI/web skeleton before
-    /// slow HTTP probes complete.
+    /// Enumerate listeners and inspect each owning process; skips probing entirely.
     pub fn enumerate_with_procs(&self) -> anyhow::Result<Vec<(Listener, ProcInfo)>> {
         let listeners = self.enumerate()?;
         let inspector = self.inspector.as_ref();
@@ -59,8 +55,7 @@ impl Engine {
             .collect())
     }
 
-    /// All current listeners on the host, after portbook's standard filters
-    /// (port > 1024, not portbook itself).
+    /// Listeners after standard filters (port > 1024, not portbook itself).
     pub fn enumerate(&self) -> anyhow::Result<Vec<Listener>> {
         Ok(self
             .enumerator
@@ -70,14 +65,9 @@ impl Engine {
             .collect())
     }
 
-    /// Probe the given listeners in parallel, yielding each `PortCard`
-    /// as its probe completes. Process inspection is fed in pre-done
-    /// (callers typically already inspected during the skeleton phase),
-    /// so this method only waits on probes — the long pole.
-    ///
-    /// Use this when the consumer can act on partial results (TUI,
-    /// scheduler broadcasting per resolution, `ls` progress meter). For
-    /// a final-only result use [`Engine::scan`].
+    /// Probe listeners in parallel, yielding each `PortCard` as its probe completes.
+    /// Process inspection is supplied pre-done so this only waits on probes.
+    /// Use [`Engine::scan`] when the consumer wants a final-only result.
     pub fn scan_stream<'a>(
         &'a self,
         pairs: Vec<(Listener, ProcInfo)>,
@@ -91,8 +81,7 @@ impl Engine {
             .buffer_unordered(64)
     }
 
-    /// Probe + inspect the given listeners in parallel. Wall-time is the
-    /// slowest single probe, not the sum.
+    /// Probe + inspect listeners in parallel; wall-time is the slowest probe, not the sum.
     pub async fn scan(&self, listeners: Vec<Listener>) -> Vec<PortCard> {
         let inspector = self.inspector.as_ref();
         let prober = &self.prober;
@@ -108,7 +97,7 @@ impl Engine {
         .await
     }
 
-    /// Convenience: enumerate + scan in one call. Sorted by port.
+    /// Enumerate + scan in one call, sorted by port.
     pub async fn scan_all(&self) -> anyhow::Result<Vec<PortCard>> {
         let listeners = self.enumerate()?;
         let mut cards = self.scan(listeners).await;
@@ -116,15 +105,9 @@ impl Engine {
         Ok(cards)
     }
 
-    /// Run one full poll cycle and yield the producer events: one
-    /// optional `Skeleton` (only when at least one port has no cached
-    /// card), one `Resolved` per probe completion, then `Done` with
-    /// cycle wall time.
-    ///
-    /// Both the scheduler (broadcast-to-AppState) and the TUI's local
-    /// poll loop go through this method. The cache strategy is the
-    /// caller's: PID-sensitive in the scheduler (keyed on (port, pid,
-    /// command)), port-only in the TUI. See [`CycleCache`].
+    /// Run one poll cycle: yields one `Skeleton`, one `Resolved` per probe completion,
+    /// then `Done` with cycle wall time. Cache strategy is the caller's choice
+    /// (see [`CycleCache`]).
     pub fn run_cycle<'a, C: CycleCache + 'a>(
         &'a self,
         cache: &'a mut C,
@@ -162,11 +145,9 @@ impl Engine {
                 }
             }
 
-            // Always emit the initial map so consumers that build their
-            // working state per-cycle (e.g. the TUI) see what the engine
-            // started with even when nothing needs re-probing. Whether
-            // to broadcast/send a skeleton frame to the user is the
-            // consumer's call (gate on `any pending`).
+            // Always emit, even when nothing needs re-probing, so consumers that
+            // rebuild working state per cycle see the engine's starting map.
+            // Whether to surface it to the user is the consumer's call.
             yield CycleEvent::Skeleton(map.clone());
 
             let mut stream = std::pin::pin!(self.scan_stream(to_probe));
@@ -186,35 +167,22 @@ fn elapsed_ms_capped(started: Instant) -> u32 {
     started.elapsed().as_millis().min(u32::MAX as u128) as u32
 }
 
-/// Per-cycle cache for [`Engine::run_cycle`]. Implementations choose the
-/// cache key (port-only vs port+pid+command) and decide which prior
-/// cards may be reused as skeleton seeds vs forced back to "pending".
+/// Per-cycle cache for [`Engine::run_cycle`]. Implementations choose the cache key
+/// (port-only vs port+pid+command) and which entries to retain across cycles.
 pub trait CycleCache {
-    /// Return a previously-resolved card for `listener`, if available.
-    /// Returning `None` makes [`Engine::run_cycle`] emit a pending
-    /// placeholder for this listener and probe it this cycle.
+    /// `None` makes [`Engine::run_cycle`] emit a pending placeholder and probe this cycle.
     fn lookup(&self, listener: &Listener) -> Option<PortCard>;
-    /// Record a freshly-resolved card.
     fn insert(&mut self, card: &PortCard);
-    /// Drop entries for listeners no longer present so a vanished port
-    /// doesn't linger across cycles.
+    /// Drop entries for vanished listeners so they don't linger across cycles.
     fn retain_present(&mut self, listeners: &[Listener]);
 }
 
-/// Producer events from [`Engine::run_cycle`]. Consumers map these to
-/// their own sink (broadcast snapshot, mpsc, etc.).
 pub enum CycleEvent {
-    /// Initial frame: cached cards plus pending placeholders. Always
-    /// emitted at cycle start — even when nothing needs probing — so
-    /// consumers that rebuild their working state per cycle see the
-    /// engine's starting map. Consumers that want to gate UI output
-    /// on "is anything actually pending?" should check the map
-    /// themselves before broadcasting/forwarding.
+    /// Cached cards + pending placeholders. Always emitted at cycle start, even when
+    /// nothing needs probing. Consumers that gate UI on "anything pending" inspect the map.
     Skeleton(HashMap<u16, PortCard>),
-    /// One card just finished probing. Boxed because `PortCard` is
-    /// large (~300B) and dwarfs the other variants.
+    /// Boxed because `PortCard` (~300B) dwarfs the other variants.
     Resolved(Box<PortCard>),
-    /// All probes done. `elapsed_ms` is the wall time of the cycle.
     Done { elapsed_ms: u32 },
 }
 
@@ -244,8 +212,6 @@ mod cycle_tests {
         }
     }
 
-    /// Empty cache — every listener reads as uncached, every card is
-    /// forced through the probe path. Mirrors a fresh-start scheduler.
     #[derive(Default)]
     struct NoCache {
         inserted: Mutex<Vec<u16>>,
@@ -258,9 +224,8 @@ mod cycle_tests {
         fn retain_present(&mut self, _ls: &[Listener]) {}
     }
 
-    /// Returns two listeners on ports unlikely to be bound. Probes will
-    /// fail fast (ConnectionRefused on loopback is immediate), so the
-    /// test stays well under one second.
+    /// Two listeners on ports unlikely to be bound; ConnectionRefused on loopback
+    /// is immediate, so probes resolve well under one second.
     fn two_unbound_listeners() -> Vec<Listener> {
         vec![
             Listener { port: 50991, pid: 1, command: "fakeA".into() },
@@ -279,7 +244,6 @@ mod cycle_tests {
         let stream = engine.run_cycle(&mut cache);
         let events: Vec<CycleEvent> = futures::StreamExt::collect(Box::pin(stream)).await;
 
-        // Shape: 1 skeleton + N resolved + 1 done, in that order.
         assert!(events.len() >= 3, "got {} events", events.len());
         assert!(
             matches!(events.first(), Some(CycleEvent::Skeleton(_))),
@@ -289,14 +253,12 @@ mod cycle_tests {
             matches!(events.last(), Some(CycleEvent::Done { .. })),
             "last event must be Done"
         );
-        // Middle events are all Resolved.
         let mid_resolved = events[1..events.len() - 1]
             .iter()
             .filter(|e| matches!(e, CycleEvent::Resolved(_)))
             .count();
         assert_eq!(mid_resolved, 2, "expected 2 Resolved events between skeleton and done");
 
-        // Skeleton carries pending cards for both listeners.
         if let Some(CycleEvent::Skeleton(map)) = events.first() {
             assert_eq!(map.len(), 2);
             assert!(map.values().all(|c| c.is_pending()));
@@ -305,8 +267,6 @@ mod cycle_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn run_cycle_emits_skeleton_with_cached_map_when_nothing_to_probe() {
-        // Cache that returns a fully-resolved card for every listener —
-        // no pending placeholders, so Skeleton must not be emitted.
         struct FullCache;
         impl CycleCache for FullCache {
             fn lookup(&self, l: &Listener) -> Option<PortCard> {
@@ -347,9 +307,8 @@ mod cycle_tests {
         let stream = engine.run_cycle(&mut cache);
         let events: Vec<CycleEvent> = futures::StreamExt::collect(Box::pin(stream)).await;
 
-        // Skeleton always fires now (carrying the cached map) so
-        // consumers can rebuild their working state per cycle. No
-        // Resolved events because nothing was probed.
+        // Regression: Skeleton must fire even with an all-cached cycle so the TUI
+        // can rebuild working state. Bug seen previously where re-probe path lost cards.
         let skeletons: Vec<&HashMap<u16, PortCard>> = events
             .iter()
             .filter_map(|e| if let CycleEvent::Skeleton(m) = e { Some(m) } else { None })

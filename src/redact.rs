@@ -17,7 +17,6 @@ pub fn redact_cmdline(cmdline: &str) -> String {
     while i < toks.len() {
         let t = toks[i];
 
-        // KEY=VALUE form: --token=abc, TOKEN=abc, DATABASE_URL=...
         if let Some(eq) = t.find('=') {
             let (k, v) = (&t[..eq], &t[eq + 1..]);
             if is_secret_key(&normalize_key(k)) {
@@ -29,7 +28,6 @@ pub fn redact_cmdline(cmdline: &str) -> String {
             continue;
         }
 
-        // Space-separated flag form: --token abc, -p hunter2
         if t.starts_with('-') && is_secret_key(&normalize_key(t)) && i + 1 < toks.len() {
             out.push(t.to_string());
             out.push(REDACTED.to_string());
@@ -37,7 +35,6 @@ pub fn redact_cmdline(cmdline: &str) -> String {
             continue;
         }
 
-        // Bare URL token: postgres://user:pass@host/db
         out.push(redact_url_userinfo(t).into_owned());
         i += 1;
     }
@@ -54,7 +51,7 @@ fn normalize_key(k: &str) -> String {
 fn is_secret_key(k: &str) -> bool {
     matches!(
         k,
-        "p" // common short flag for password
+        "p" // psql/mysql short flag for password
             | "token"
             | "password"
             | "passwd"
@@ -77,8 +74,7 @@ fn is_secret_key(k: &str) -> bool {
 }
 
 /// `scheme://user:pass@host/...` → `scheme://user:***@host/...`.
-/// Conservative: only touches the userinfo portion, leaves host/path/query
-/// alone so users still see *which* service they're looking at.
+/// Touches only userinfo; host/path/query are kept so users still see which service it is.
 fn redact_url_userinfo(s: &str) -> Cow<'_, str> {
     let Some(scheme_end) = s.find("://") else { return Cow::Borrowed(s) };
     let scheme_end = scheme_end + 3;
@@ -91,7 +87,6 @@ fn redact_url_userinfo(s: &str) -> Cow<'_, str> {
     let userinfo = &rest[..at];
     let after = &rest[at..]; // includes '@'
     let Some(colon) = userinfo.find(':') else {
-        // user@host with no password — nothing to redact.
         return Cow::Borrowed(s);
     };
     let user = &userinfo[..colon];

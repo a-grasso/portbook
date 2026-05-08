@@ -39,8 +39,7 @@ impl VersionState {
     }
 }
 
-/// Spawn a background task that polls GitHub for the latest release once.
-/// Failures are silent — update info is best-effort.
+/// Best-effort one-shot poll of GitHub for the latest release; failures are silent.
 pub fn spawn_check(state: VersionState) {
     tokio::spawn(async move {
         if let Some(tag) = fetch_latest_tag().await {
@@ -67,7 +66,6 @@ fn strip_v(s: &str) -> &str {
     s.strip_prefix('v').unwrap_or(s)
 }
 
-/// Returns true if `latest` is strictly greater than `current`.
 /// Naive semver compare on dot-separated numeric segments; non-numeric
 /// suffixes (e.g. -rc.1) are ignored on both sides.
 fn is_newer(latest: &str, current: &str) -> bool {
