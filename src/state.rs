@@ -18,6 +18,12 @@ pub struct PortCard {
     pub project_root: Option<String>,
     pub project_name: Option<String>,
     pub cwd: Option<String>,
+    /// Java-stack-trace-style abbreviation of `cwd`: parents collapsed
+    /// to single chars, leaf intact, `$HOME` replaced with `~`. Computed
+    /// once on the daemon so consumers (web UI, agents) don't need to
+    /// know the server's HOME. Omitted when `cwd` is None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd_short: Option<String>,
     pub cmdline: Option<String>,
     pub status: Option<u16>,
     pub probed_url: Option<String>,
@@ -52,6 +58,7 @@ impl PortCard {
             project_root,
             project_name,
             cwd: proc.cwd.clone(),
+            cwd_short: proc.cwd.as_deref().map(crate::project::shrink_path),
             cmdline: proc.cmdline.as_deref().map(crate::redact::redact_cmdline),
             status: probe.status,
             probed_url: Some(probe.probed_url.clone()),
@@ -115,6 +122,7 @@ impl PortCard {
             project_root,
             project_name,
             cwd: proc.cwd.clone(),
+            cwd_short: proc.cwd.as_deref().map(crate::project::shrink_path),
             cmdline: proc.cmdline.as_deref().map(crate::redact::redact_cmdline),
             status: None,
             probed_url: None,

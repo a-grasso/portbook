@@ -322,6 +322,7 @@ mod cycle_tests {
                     project_root: None,
                     project_name: None,
                     cwd: None,
+                    cwd_short: None,
                     cmdline: None,
                     status: Some(200),
                     probed_url: Some(format!("http://127.0.0.1:{}/", l.port)),

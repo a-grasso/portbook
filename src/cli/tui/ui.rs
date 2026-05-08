@@ -132,6 +132,10 @@ fn build_item(card: &PortCard, expanded: bool, width: usize) -> ListItem<'static
             Style::default().fg(Color::DarkGray),
         ));
     }
+    if let Some(short) = card.cwd_short.as_deref().filter(|s| !s.is_empty()) {
+        head.push(Span::raw("  "));
+        head.push(Span::styled(short.to_string(), Style::default().fg(Color::DarkGray)));
+    }
     let show_reason = card.is_pending() || !matches!(card.kind, ProbeKind::Live);
     if show_reason
         && let Some(reason) = card.reason.as_deref()
