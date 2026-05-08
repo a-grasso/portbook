@@ -41,6 +41,10 @@ pub enum ProbeError {
     Connect,
     Decode,
     Body,
+    /// Server responded with redirects exceeding our follow limit. The
+    /// host clearly speaks HTTP — surfaced as `Error` (not `Dead`) so
+    /// users see "redirect chain" instead of "not HTTP".
+    Redirect,
     Other,
 }
 
@@ -67,7 +71,7 @@ impl Prober {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(PROBE_TIMEOUT_MS))
-            .redirect(reqwest::redirect::Policy::limited(1))
+            .redirect(reqwest::redirect::Policy::limited(5))
             .user_agent("portbook/0.1")
             .build()
             .expect("reqwest client");
@@ -95,8 +99,16 @@ impl Prober {
                     let retryable = matches!(class, ProbeError::Timeout | ProbeError::Connect);
                     if !retryable || attempts >= MAX_ATTEMPTS {
                         let elapsed_ms = start.elapsed().as_millis() as u32;
+                        // A redirect-cap error proves the server speaks HTTP —
+                        // classify as Error (not Dead) so users don't see
+                        // "not HTTP" for a working dev server with a long
+                        // redirect chain.
+                        let kind = match class {
+                            ProbeError::Redirect => ProbeKind::Error,
+                            _ => ProbeKind::Dead,
+                        };
                         return ProbeResult {
-                            kind: ProbeKind::Dead,
+                            kind,
                             status: None,
                             title: None,
                             description: None,
@@ -148,6 +160,7 @@ impl Prober {
 fn short_err(e: &reqwest::Error) -> String {
     if e.is_timeout() { return "timeout".into(); }
     if e.is_connect() { return "connection refused".into(); }
+    if e.is_redirect() { return "redirect chain".into(); }
     if e.is_decode() || e.is_body() { return "non-HTTP response".into(); }
     "not HTTP".into()
 }
@@ -155,6 +168,7 @@ fn short_err(e: &reqwest::Error) -> String {
 fn classify_err(e: &reqwest::Error) -> ProbeError {
     if e.is_timeout() { return ProbeError::Timeout; }
     if e.is_connect() { return ProbeError::Connect; }
+    if e.is_redirect() { return ProbeError::Redirect; }
     if e.is_decode() { return ProbeError::Decode; }
     if e.is_body() { return ProbeError::Body; }
     ProbeError::Other
