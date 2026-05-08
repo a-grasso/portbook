@@ -4,6 +4,20 @@ All notable changes to portbook are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-05-08
+
+### Bug Fixes
+
+- Handle redirect chains as HTTP, not "not HTTP"
+
+### Features
+
+- Show shrunken cwd on TUI/ls/web cards
+
+### Refactor
+
+- Trim restate-the-code comments
+
 ## [0.2.0] - 2026-05-07
 
 ### Bug Fixes
@@ -14,6 +28,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Handle Windows in open_in_browser
 - Wire popover title to aria-labelledby
 - Preserve cached cards across re-probe cycles
+
+### Chores
+
+- V0.2.0
 
 ### Documentation
 
