@@ -34,14 +34,10 @@ pub fn folder_name(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// Java-stack-trace-style path abbreviation: keep the last segment in
-/// full, replace each parent segment with its first character, and
-/// substitute `$HOME` with `~`. Designed for at-a-glance display where
-/// the leaf identifies the project and the prefix is just breadcrumb
-/// context.
-///
-/// `/Users/agr/Projects/private/portbook` → `~/P/p/portbook`
-/// `/var/www/site`                        → `/v/w/site`
+/// Abbreviate a path: keep the leaf intact, collapse each parent segment to its first
+/// character, and substitute `$HOME` with `~`. Examples:
+/// `/Users/agr/Projects/private/portbook` → `~/P/p/portbook`,
+/// `/var/www/site` → `/v/w/site`.
 pub fn shrink_path(path: &str) -> String {
     if path.is_empty() {
         return String::new();
@@ -94,11 +90,9 @@ mod shrink_path_tests {
     use super::*;
 
     fn with_home<F: FnOnce()>(home: &str, f: F) {
-        // Tests run single-threaded for env mutation by serializing on a
-        // mutex would be ideal; cargo test uses threads but HOME reads
-        // are scoped per-test and we restore on drop.
         let prev = std::env::var_os("HOME");
-        // SAFETY: tests are gated and serial use is fine for our scope.
+        // SAFETY: cargo test threads can race on env, but HOME reads in shrink_path are
+        // brief and confined to this test module; we restore the previous value below.
         unsafe { std::env::set_var("HOME", home); }
         f();
         match prev {

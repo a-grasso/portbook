@@ -39,9 +39,6 @@ pub async fn host_guard(req: Request, next: Next) -> Result<Response, StatusCode
     Ok(next.run(req).await)
 }
 
-/// Generate a shell completion script for `cmd` and write it to `out`.
-/// Thin wrapper over clap_complete::generate so we can unit-test the
-/// surface without spinning up the full binary.
 pub fn print_completions<W: std::io::Write>(
     shell: clap_complete::Shell,
     cmd: &mut clap::Command,
@@ -51,8 +48,7 @@ pub fn print_completions<W: std::io::Write>(
     clap_complete::generate(shell, cmd, name, out);
 }
 
-/// Convert a `-v` count flag into a `tracing-subscriber` env-filter
-/// directive. 0 = info, 1 = debug, 2+ = trace.
+/// 0 = info, 1 = debug, 2+ = trace.
 pub fn tracing_filter(verbosity: u8) -> &'static str {
     match verbosity {
         0 => "portbook=info,tower_http=warn",
@@ -66,8 +62,6 @@ mod completions_tests {
     use clap::CommandFactory;
     use clap_complete::Shell;
 
-    // A trivial Cli stand-in for completion tests so we don't depend on
-    // the binary's main.rs Cli struct from a lib test.
     #[derive(clap::Parser)]
     #[command(name = "portbook")]
     struct DummyCli {
@@ -116,7 +110,6 @@ mod verbosity_tests {
 
     #[test]
     fn higher_v_implies_louder_dependencies() {
-        // -vv should also lift our HTTP middleware to a chattier level
         assert!(tracing_filter(0).contains("tower_http=warn"));
         assert!(!tracing_filter(2).contains("tower_http=warn"));
     }

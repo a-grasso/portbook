@@ -16,8 +16,7 @@ pub struct Scheduler {
     cache: SchedulerCache,
 }
 
-/// PID-and-command-keyed cache. A reload that changes PID forces a
-/// re-probe (correctness over noise) — see [`CacheKey`].
+/// Keyed by (port, pid, command) so a reload that changes PID forces a re-probe.
 #[derive(Default)]
 struct SchedulerCache {
     inner: HashMap<CacheKey, PortCard>,
@@ -82,10 +81,8 @@ impl Scheduler {
                 CycleEvent::Skeleton(map) => {
                     new_count = map.values().filter(|c| c.is_pending()).count();
                     total = map.len();
-                    // Only broadcast a skeleton frame when there's at
-                    // least one pending card — otherwise an all-cached
-                    // cycle would briefly clear scan_elapsed_ms and
-                    // make the UI flicker "probing…".
+                    // An all-cached cycle would briefly clear scan_elapsed_ms and make
+                    // the UI flicker "probing…"; skip the skeleton broadcast in that case.
                     if new_count > 0 {
                         self.state.replace_skeleton(map).await;
                     }

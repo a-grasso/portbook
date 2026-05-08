@@ -18,10 +18,8 @@ pub struct PortCard {
     pub project_root: Option<String>,
     pub project_name: Option<String>,
     pub cwd: Option<String>,
-    /// Java-stack-trace-style abbreviation of `cwd`: parents collapsed
-    /// to single chars, leaf intact, `$HOME` replaced with `~`. Computed
-    /// once on the daemon so consumers (web UI, agents) don't need to
-    /// know the server's HOME. Omitted when `cwd` is None.
+    /// Abbreviated `cwd` (parents collapsed to single chars, leaf intact, `$HOME` → `~`).
+    /// Computed on the daemon so consumers don't need to know the server's HOME.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd_short: Option<String>,
     pub cmdline: Option<String>,
@@ -32,12 +30,9 @@ pub struct PortCard {
     pub error_class: Option<ProbeError>,
     pub error_detail: Option<String>,
     pub attempts: u8,
-    /// True when this card is a skeleton placeholder (enumeration only,
-    /// probe still in flight). Cross-FFI consumers (web UI, agents) read
-    /// this directly instead of pattern-matching on the human-facing
-    /// `reason` string. Omitted when false to keep the wire format compact
-    /// and to preserve backward compatibility with pre-v0.1.7 consumers
-    /// that don't expect the field.
+    /// True when this card is a skeleton placeholder (enumeration only, probe in flight).
+    /// Skipped when false: keeps wire format compact and preserves backward compat with
+    /// older consumers that lack the field (they fall back to the `reason`/`attempts` heuristic).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pending: bool,
 }
@@ -81,32 +76,23 @@ pub struct AppState {
 #[derive(Default)]
 struct Inner {
     cards: HashMap<u16, PortCard>,
-    /// Wall time of the most recent scan that produced these cards.
-    /// `None` means the cards are a skeleton (enumeration only, probes
-    /// in flight) — not yet a full scan result.
+    /// `None` means cards are a skeleton (enumeration only, probes in flight).
     scan_elapsed_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub ports: Vec<PortCard>,
-    /// Wall time of the scan cycle that produced this snapshot, in
-    /// milliseconds. `None` for skeleton snapshots (enumerate-only,
-    /// probes still in flight) and for pre-v0.1.7 snapshots.
+    /// `None` for skeleton snapshots (probes in flight) and for older snapshots that lack the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan_elapsed_ms: Option<u32>,
 }
 
-/// Marker reason set on a [`PortCard`] when the row was synthesized
-/// from enumeration only — its real probe is still in flight. The TUI
-/// renders these as neutral/pending and includes them in the Live tab.
+/// Marker reason set on placeholder rows whose real probe is still in flight.
 pub(crate) const PENDING_REASON: &str = "probing…";
 
 impl PortCard {
-    /// Build a placeholder card from enumeration + process inspection
-    /// only — no probe has happened yet. Used to paint a skeleton on
-    /// first frame so users don't stare at an empty UI for ~5s while
-    /// retries time out.
+    /// Placeholder card from enumeration only — no probe has happened yet.
     pub(crate) fn pending(port: u16, pid: u32, command: String, proc: &ProcInfo) -> Self {
         let project_root = proc.cwd.as_deref().and_then(crate::project::detect_root);
         let project_name = project_root.as_deref().map(crate::project::folder_name);
@@ -135,12 +121,9 @@ impl PortCard {
         }
     }
 
-    /// True when this card is a skeleton placeholder rather than a
-    /// fully-probed result. See [`PortCard::pending`]. Reads the
-    /// explicit `pending` flag — pre-v0.1.7 snapshots that lack the
-    /// field but carry the historical "probing…" reason and zero
-    /// attempts are still recognized as pending so deserialized old
-    /// snapshots round-trip correctly.
+    /// True when this card is a skeleton placeholder rather than a fully-probed result.
+    /// Falls back to the `reason`/`attempts` heuristic so older snapshots without the
+    /// `pending` field still round-trip correctly.
     pub fn is_pending(&self) -> bool {
         self.pending
             || (self.attempts == 0 && self.reason.as_deref() == Some(PENDING_REASON))
@@ -172,9 +155,6 @@ impl AppState {
         }
     }
 
-    /// Replace the full state with a completed scan cycle. `elapsed_ms`
-    /// is the wall time of the scan that produced these cards; it
-    /// rides along on every emitted [`Snapshot`].
     pub async fn replace(&self, new_map: HashMap<u16, PortCard>, elapsed_ms: Option<u32>) {
         {
             let mut w = self.inner.write().await;
@@ -185,19 +165,13 @@ impl AppState {
         let _ = self.tx.send(snap);
     }
 
-    /// Replace the state with skeleton cards (enumeration only, probes
-    /// pending). `scan_elapsed_ms` is cleared. Used by the scheduler
-    /// to paint a fast first frame before slow probes finish.
+    /// Replace state with skeleton cards (probes pending); clears `scan_elapsed_ms`.
     pub async fn replace_skeleton(&self, skeleton: HashMap<u16, PortCard>) {
         self.replace(skeleton, None).await;
     }
 
-    /// Insert or replace a single card and broadcast the resulting
-    /// snapshot. Keeps `scan_elapsed_ms = None` (skeleton state); the
-    /// caller marks the cycle done with [`AppState::mark_done`].
-    ///
-    /// Used by the scheduler's per-probe streaming path to avoid
-    /// cloning the entire port map on every probe completion.
+    /// Insert/replace a single card and broadcast. Keeps `scan_elapsed_ms = None` until
+    /// the caller stamps the cycle done via [`AppState::mark_done`].
     pub async fn update_one(&self, card: PortCard) {
         {
             let mut w = self.inner.write().await;
@@ -209,7 +183,6 @@ impl AppState {
     }
 
     /// Stamp the current state as a resolved cycle and broadcast.
-    /// Called once per cycle after all per-probe `update_one` calls.
     pub async fn mark_done(&self, elapsed_ms: u32) {
         {
             let mut w = self.inner.write().await;
@@ -237,9 +210,6 @@ mod pending_field_tests {
 
     #[test]
     fn resolved_card_omits_pending_field() {
-        // `pending: false` is the default and is skipped when serializing
-        // to keep wire payloads compact and preserve backward compat with
-        // pre-v0.1.7 consumers that don't expect the field.
         let probe = ProbeResult {
             kind: ProbeKind::Live,
             status: Some(200),
