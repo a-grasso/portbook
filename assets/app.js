@@ -21,7 +21,7 @@ const SEP = "";
 
 function sig(c) {
   return [
-    c.kind, c.url, c.reason || "", c.project_name || "",
+    c.kind, c.url, c.reason || "", c.project_name || "", c.cwd_short || "",
     c.title || "", c.description || "", c.cmdline || c.command || "",
     c.status ?? "", c.elapsed_ms ?? "", c.error_class || "", c.error_detail || "",
     c.probed_url || "", c.probed_at_unix ?? "", c.attempts ?? "",
@@ -125,6 +125,7 @@ function fillCard(node, c) {
     badge.className = `kind-badge badge-${c.kind}`;
   }
   node.querySelector(".project").textContent = c.project_name || "";
+  node.querySelector(".cwd").textContent = c.cwd_short || "";
   node.querySelector(".title").textContent = c.title || "";
   node.querySelector(".desc").textContent = c.description || "";
   node.querySelector(".cmd").textContent = c.cmdline || c.command || "";

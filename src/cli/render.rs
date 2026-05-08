@@ -150,11 +150,18 @@ fn write_card(
     writeln!(out, "{}{}{}", head, body, tail)?;
 
     let cmd = c.cmdline.clone().unwrap_or_else(|| c.command.clone());
-    if !cmd.is_empty() {
+    let cwd_short = c.cwd_short.as_deref().filter(|s| !s.is_empty()).map(str::to_owned);
+    let sub = match (cwd_short, cmd.is_empty()) {
+        (Some(p), false) => format!("{p}  ·  {cmd}"),
+        (Some(p), true) => p,
+        (None, false) => cmd,
+        (None, true) => String::new(),
+    };
+    if !sub.is_empty() {
         let indent = "      ";
-        let cmd_budget = width.saturating_sub(indent.chars().count()).max(20);
-        let cmd_truncated = truncate_chars(&cmd, cmd_budget);
-        writeln!(out, "{}{}", indent, s.dim(&cmd_truncated))?;
+        let budget = width.saturating_sub(indent.chars().count()).max(20);
+        let truncated = truncate_chars(&sub, budget);
+        writeln!(out, "{}{}", indent, s.dim(&truncated))?;
     }
     Ok(())
 }

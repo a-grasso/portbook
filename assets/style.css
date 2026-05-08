@@ -171,6 +171,14 @@ main {
 }
 .project:empty { display: none; }
 
+.cwd {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  opacity: 0.75;
+}
+.cwd:empty { display: none; }
+
 .title {
   font-size: 15px;
   font-weight: 600;
