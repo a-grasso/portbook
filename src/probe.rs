@@ -66,49 +66,30 @@ impl Prober {
     }
 
     pub async fn probe(&self, port: u16) -> ProbeResult {
-        let url = format!("http://127.0.0.1:{port}/");
         let probed_at_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let start = Instant::now();
 
-        let mut attempts: u8 = 0;
-        let resp = loop {
-            attempts += 1;
-            match self.client.get(&url).send().await {
-                Ok(r) => break r,
-                Err(e) => {
-                    let class = classify_err(&e);
-                    // Decode/Body failures mean something non-HTTP is on the socket —
-                    // retrying won't change the answer.
-                    let retryable = matches!(class, ProbeError::Timeout | ProbeError::Connect);
-                    if !retryable || attempts >= MAX_ATTEMPTS {
-                        let elapsed_ms = start.elapsed().as_millis() as u32;
-                        // A redirect-cap error proves the server speaks HTTP, so it
-                        // belongs in Error (not Dead).
-                        let kind = match class {
-                            ProbeError::Redirect => ProbeKind::Error,
-                            _ => ProbeKind::Dead,
-                        };
-                        return ProbeResult {
-                            kind,
-                            status: None,
-                            title: None,
-                            description: None,
-                            reason: Some(short_err(&e)),
-                            probed_url: url,
-                            probed_at_unix,
-                            elapsed_ms,
-                            error_class: Some(class),
-                            error_detail: Some(truncate(&e.to_string(), 240)),
-                            attempts,
-                        };
+        // Try IPv4 loopback first; if nothing is listening there, retry the IPv6
+        // loopback before giving up — Vite and other tools bind [::1] only.
+        let resp = match self.request(&format!("http://127.0.0.1:{port}/")).await {
+            Ok(r) => r,
+            Err(res) if res.class == ProbeError::Connect => {
+                match self.request(&format!("http://[::1]:{port}/")).await {
+                    Ok(r) => r,
+                    Err(res6) => {
+                        return res6.into_result(start.elapsed().as_millis() as u32, probed_at_unix);
                     }
                 }
             }
+            Err(res) => return res.into_result(start.elapsed().as_millis() as u32, probed_at_unix),
         };
 
+        let attempts = resp.attempts;
+        let url = resp.url;
+        let resp = resp.resp;
         let status = resp.status().as_u16();
         let body = resp.bytes().await.unwrap_or_default();
         let elapsed_ms = start.elapsed().as_millis() as u32;
@@ -137,6 +118,71 @@ impl Prober {
             error_class: None,
             error_detail: None,
             attempts,
+        }
+    }
+
+    async fn request(&self, url: &str) -> Result<ProbedResponse, ProbeFailure> {
+        let mut attempts: u8 = 0;
+        loop {
+            attempts += 1;
+            match self.client.get(url).send().await {
+                Ok(resp) => {
+                    return Ok(ProbedResponse { resp, url: url.to_string(), attempts });
+                }
+                Err(e) => {
+                    let class = classify_err(&e);
+                    // Decode/Body failures mean something non-HTTP is on the socket —
+                    // retrying won't change the answer.
+                    let retryable = matches!(class, ProbeError::Timeout | ProbeError::Connect);
+                    if !retryable || attempts >= MAX_ATTEMPTS {
+                        return Err(ProbeFailure {
+                            class,
+                            reason: short_err(&e),
+                            detail: truncate(&e.to_string(), 240),
+                            url: url.to_string(),
+                            attempts,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct ProbedResponse {
+    resp: reqwest::Response,
+    url: String,
+    attempts: u8,
+}
+
+struct ProbeFailure {
+    class: ProbeError,
+    reason: String,
+    detail: String,
+    url: String,
+    attempts: u8,
+}
+
+impl ProbeFailure {
+    fn into_result(self, elapsed_ms: u32, probed_at_unix: u64) -> ProbeResult {
+        // A redirect-cap error proves the server speaks HTTP, so it belongs in
+        // Error (not Dead).
+        let kind = match self.class {
+            ProbeError::Redirect => ProbeKind::Error,
+            _ => ProbeKind::Dead,
+        };
+        ProbeResult {
+            kind,
+            status: None,
+            title: None,
+            description: None,
+            reason: Some(self.reason),
+            probed_url: self.url,
+            probed_at_unix,
+            elapsed_ms,
+            error_class: Some(self.class),
+            error_detail: Some(self.detail),
+            attempts: self.attempts,
         }
     }
 }
@@ -189,4 +235,47 @@ fn extract(html: &str) -> (Option<String>, Option<String>) {
 
 fn clean(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn serve_once(addr: &str) -> u16 {
+        let listener = TcpListener::bind(addr).await.expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf).await;
+                let body = "<html><head><title>Renderer</title></head><body></body></html>";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_ipv6_loopback_when_v4_refuses() {
+        let port = serve_once("[::1]:0").await;
+        let result = Prober::new().probe(port).await;
+        assert_eq!(result.kind, ProbeKind::Live, "reason: {:?}", result.reason);
+        assert_eq!(result.probed_url, format!("http://[::1]:{port}/"));
+        assert_eq!(result.title.as_deref(), Some("Renderer"));
+    }
+
+    #[tokio::test]
+    async fn probes_ipv4_loopback_directly() {
+        let port = serve_once("127.0.0.1:0").await;
+        let result = Prober::new().probe(port).await;
+        assert_eq!(result.kind, ProbeKind::Live, "reason: {:?}", result.reason);
+        assert_eq!(result.probed_url, format!("http://127.0.0.1:{port}/"));
+    }
 }
