@@ -216,11 +216,9 @@ impl App {
             }
             KeyCode::Char(' ') | KeyCode::Char('x') => self.toggle_expand(),
             KeyCode::Enter => self.handle_enter(),
-            KeyCode::Esc => {
-                if !self.filter.is_empty() {
-                    self.filter.clear();
-                    self.set_status("filter cleared");
-                }
+            KeyCode::Esc if !self.filter.is_empty() => {
+                self.filter.clear();
+                self.set_status("filter cleared");
             }
             _ => {}
         }
