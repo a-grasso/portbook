@@ -4,11 +4,21 @@ All notable changes to portbook are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] - 2026-07-31
+
+### Features
+
+- Add favicon to the web UI
+
 ## [0.2.2] - 2026-07-21
 
 ### Bug Fixes
 
 - Fall back to [::1] when 127.0.0.1 connect is refused
+
+### Chores
+
+- V0.2.2
 
 ## [0.2.1] - 2026-05-08
 
