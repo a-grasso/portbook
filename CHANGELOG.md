@@ -4,7 +4,17 @@ All notable changes to portbook are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/) and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.4] - 2026-07-31
+
+### Features
+
+- Add --port to run a daemon beside an always-on one
+
 ## [0.2.3] - 2026-07-31
+
+### Chores
+
+- V0.2.3
 
 ### Features
 
