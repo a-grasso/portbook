@@ -8,7 +8,7 @@
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
-use portbook::build_app;
+use portbook::{DEFAULT_PORT, build_app};
 use portbook::probe::{ProbeKind, ProbeResult};
 use portbook::process::ProcInfo;
 use portbook::state::{AppState, PortCard};
@@ -35,7 +35,11 @@ const ATTACKER_HOSTS: &[&str] = &[
 ];
 
 async fn status_for(host: Option<&str>, path: &str) -> StatusCode {
-    let app = build_app(AppState::new(), VersionState::new());
+    status_for_port(DEFAULT_PORT, host, path).await
+}
+
+async fn status_for_port(port: u16, host: Option<&str>, path: &str) -> StatusCode {
+    let app = build_app(AppState::new(), VersionState::new(), port);
     let mut b = Request::builder().uri(path);
     if let Some(h) = host {
         b = b.header(header::HOST, h);
@@ -71,6 +75,30 @@ async fn host_allowlist_rejects_attacker_domains() {
 #[tokio::test]
 async fn host_allowlist_rejects_missing_header() {
     assert_eq!(status_for(None, "/api/ports").await, StatusCode::FORBIDDEN);
+}
+
+// The allowlist is derived from the port the daemon actually bound, not the
+// default - otherwise `serve --port` would 403 every request to itself.
+#[tokio::test]
+async fn host_allowlist_follows_the_configured_port() {
+    for host in ["127.0.0.1:7778", "localhost:7778", "[::1]:7778"] {
+        assert_eq!(
+            status_for_port(7778, Some(host), "/api/ports").await,
+            StatusCode::OK,
+            "host {host:?} should be allowed when bound to 7778"
+        );
+    }
+}
+
+#[tokio::test]
+async fn host_allowlist_rejects_other_ports_when_reconfigured() {
+    for host in ["127.0.0.1:7777", "localhost:7777"] {
+        assert_eq!(
+            status_for_port(7778, Some(host), "/api/ports").await,
+            StatusCode::FORBIDDEN,
+            "host {host:?} must be rejected when bound to 7778"
+        );
+    }
 }
 
 #[tokio::test]
@@ -156,7 +184,7 @@ fn assert_no_secrets(label: &str, body: &str) {
 #[tokio::test]
 async fn api_ports_never_emits_secret_values() {
     let state = state_with_planted_card(18080).await;
-    let app = build_app(state, VersionState::new());
+    let app = build_app(state, VersionState::new(), DEFAULT_PORT);
     let req = Request::builder()
         .uri("/api/ports")
         .header(header::HOST, "127.0.0.1:7777")
@@ -171,7 +199,7 @@ async fn api_ports_never_emits_secret_values() {
 #[tokio::test]
 async fn api_stream_never_emits_secret_values() {
     let state = state_with_planted_card(18080).await;
-    let app = build_app(state, VersionState::new());
+    let app = build_app(state, VersionState::new(), DEFAULT_PORT);
     let req = Request::builder()
         .uri("/api/stream")
         .header(header::HOST, "127.0.0.1:7777")

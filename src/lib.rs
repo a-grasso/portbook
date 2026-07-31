@@ -11,7 +11,7 @@ pub mod state;
 pub mod version;
 
 use axum::Router;
-use axum::extract::Request;
+use axum::extract::{Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::Response;
@@ -20,19 +20,31 @@ use axum::routing::get;
 pub use state::AppState;
 pub use version::VersionState;
 
-pub const BIND_ADDR: &str = "127.0.0.1:7777";
-pub const SELF_PORT: u16 = 7777;
+/// Where the daemon lives unless `--port` / `PORTBOOK_PORT` says otherwise.
+pub const DEFAULT_PORT: u16 = 7777;
+
+/// The socket the daemon binds. Loopback-only by design: portbook exposes
+/// process cmdlines and cwds, which have no business on a LAN interface.
+pub fn bind_addr(port: u16) -> String {
+    format!("127.0.0.1:{port}")
+}
 
 /// Block DNS-rebinding: only accept requests whose Host header matches the
 /// loopback address we bind to. A rebound attacker domain would carry its own
 /// hostname here and be rejected before reaching any handler.
-pub async fn host_guard(req: Request, next: Next) -> Result<Response, StatusCode> {
+pub async fn host_guard(
+    State(port): State<u16>,
+    req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
     let host = req
         .headers()
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    let allowed = matches!(host, "127.0.0.1:7777" | "localhost:7777" | "[::1]:7777");
+    let allowed = host == format!("127.0.0.1:{port}")
+        || host == format!("localhost:{port}")
+        || host == format!("[::1]:{port}");
     if !allowed {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -54,6 +66,21 @@ pub fn tracing_filter(verbosity: u8) -> &'static str {
         0 => "portbook=info,tower_http=warn",
         1 => "portbook=debug,tower_http=info",
         _ => "portbook=trace,tower_http=debug",
+    }
+}
+
+#[cfg(test)]
+mod bind_addr_tests {
+    use super::{DEFAULT_PORT, bind_addr};
+
+    #[test]
+    fn binds_loopback_on_the_default_port() {
+        assert_eq!(bind_addr(DEFAULT_PORT), "127.0.0.1:7777");
+    }
+
+    #[test]
+    fn binds_loopback_on_a_requested_port() {
+        assert_eq!(bind_addr(7778), "127.0.0.1:7778");
     }
 }
 
@@ -115,7 +142,9 @@ mod verbosity_tests {
     }
 }
 
-pub fn build_app(state: AppState, version: VersionState) -> Router {
+/// `port` is the port the daemon is bound to - the Host allowlist is derived
+/// from it, so it must match the listener or every request 403s.
+pub fn build_app(state: AppState, version: VersionState, port: u16) -> Router {
     let api = Router::new()
         .route("/api/ports", get(api::ports))
         .route("/api/stream", get(api::stream))
@@ -125,5 +154,5 @@ pub fn build_app(state: AppState, version: VersionState) -> Router {
         .with_state(version);
     api.merge(version_api)
         .fallback(api::static_handler)
-        .layer(middleware::from_fn(host_guard))
+        .layer(middleware::from_fn_with_state(port, host_guard))
 }
