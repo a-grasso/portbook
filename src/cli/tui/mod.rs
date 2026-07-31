@@ -25,7 +25,8 @@ use std::time::Duration;
 /// table. Coexists with `EXIT_PORT_NOT_FOUND = 3` from `explain`.
 pub const EXIT_NOT_A_TTY: i32 = 4;
 
-pub async fn run_tui() -> anyhow::Result<i32> {
+/// `port` is the daemon to follow; without one the TUI polls locally.
+pub async fn run_tui(port: u16) -> anyhow::Result<i32> {
     if !io::stdout().is_terminal() {
         eprintln!(
             "portbook tui requires an interactive terminal.\n\
@@ -34,7 +35,7 @@ pub async fn run_tui() -> anyhow::Result<i32> {
         return Ok(EXIT_NOT_A_TTY);
     }
 
-    let source_label = if source::daemon_alive().await {
+    let source_label = if source::daemon_alive(port).await {
         "daemon"
     } else {
         "polling"
@@ -47,7 +48,7 @@ pub async fn run_tui() -> anyhow::Result<i32> {
     // event arrives.
     let initial = crate::state::Snapshot { ports: Vec::new(), scan_elapsed_ms: None };
     let (snap_tx, mut snap_rx) = tokio::sync::watch::channel(initial);
-    source::spawn(snap_tx);
+    source::spawn(snap_tx, port);
 
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();

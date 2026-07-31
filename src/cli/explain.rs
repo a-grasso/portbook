@@ -15,10 +15,12 @@ pub struct ExplainOpts {
 /// Distinct from clap's `2` (misuse) and the generic `1` (runtime error).
 pub const EXIT_PORT_NOT_FOUND: i32 = 3;
 
-pub async fn run_explain(opts: ExplainOpts) -> anyhow::Result<i32> {
-    let snapshot = match fetch_from_daemon().await {
+/// `daemon_port` is where portbook itself serves - not `opts.port`, the port
+/// being explained.
+pub async fn run_explain(opts: ExplainOpts, daemon_port: u16) -> anyhow::Result<i32> {
+    let snapshot = match fetch_from_daemon(daemon_port).await {
         Some(s) => s,
-        None => one_shot_scan().await?,
+        None => one_shot_scan(daemon_port).await?,
     };
     let card = match snapshot.ports.iter().find(|c| c.port == opts.port) {
         Some(c) => c,

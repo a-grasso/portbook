@@ -17,7 +17,8 @@ pub struct WatchOpts {
     pub interval_secs: u64,
 }
 
-pub async fn run_watch(opts: WatchOpts) -> anyhow::Result<()> {
+/// `port` is the daemon to poll; each tick falls back to a local scan.
+pub async fn run_watch(opts: WatchOpts, port: u16) -> anyhow::Result<()> {
     let interval_secs = opts.interval_secs.max(1);
     let mut tick = interval(Duration::from_secs(interval_secs));
     let style = Style::resolve(opts.color);
@@ -34,9 +35,9 @@ pub async fn run_watch(opts: WatchOpts) -> anyhow::Result<()> {
 
     loop {
         tick.tick().await;
-        let snapshot = match fetch_from_daemon().await {
+        let snapshot = match fetch_from_daemon(port).await {
             Some(s) => s,
-            None => match one_shot_scan().await {
+            None => match one_shot_scan(port).await {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("scan failed: {e:#}");

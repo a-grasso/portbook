@@ -3,7 +3,7 @@
 //! Every surface (web UI, CLI, agent endpoints) goes through `Engine`.
 //! See `ARCHITECTURE.md` for the layering rules.
 
-use crate::SELF_PORT;
+use crate::DEFAULT_PORT;
 use crate::discovery::{Listener, PortEnumerator};
 use crate::probe::Prober;
 use crate::process::{ProcInfo, ProcessInspector};
@@ -18,14 +18,17 @@ pub struct Engine {
     enumerator: Box<dyn PortEnumerator>,
     inspector: Box<dyn ProcessInspector>,
     prober: Prober,
+    /// The port portbook itself serves on, hidden from every listing.
+    self_port: u16,
 }
 
 impl Engine {
-    pub fn new() -> Self {
+    pub fn new(self_port: u16) -> Self {
         Self::with_deps(
             crate::discovery::default(),
             crate::process::default(),
             Prober::new(),
+            self_port,
         )
     }
 
@@ -34,8 +37,9 @@ impl Engine {
         enumerator: Box<dyn PortEnumerator>,
         inspector: Box<dyn ProcessInspector>,
         prober: Prober,
+        self_port: u16,
     ) -> Self {
-        Self { enumerator, inspector, prober }
+        Self { enumerator, inspector, prober, self_port }
     }
 
     /// Enumerate listeners and inspect each owning process; skips probing entirely.
@@ -61,7 +65,7 @@ impl Engine {
             .enumerator
             .list()?
             .into_iter()
-            .filter(|l| l.port > 1024 && l.port != SELF_PORT)
+            .filter(|l| l.port > 1024 && l.port != self.self_port)
             .collect())
     }
 
@@ -188,7 +192,7 @@ pub enum CycleEvent {
 
 impl Default for Engine {
     fn default() -> Self {
-        Self::new()
+        Self::new(DEFAULT_PORT)
     }
 }
 
@@ -233,13 +237,44 @@ mod cycle_tests {
         ]
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn run_cycle_emits_skeleton_then_resolved_then_done() {
-        let engine = Engine::with_deps(
-            Box::new(FakeEnum(two_unbound_listeners())),
+    fn engine_on(self_port: u16, listeners: Vec<Listener>) -> Engine {
+        Engine::with_deps(
+            Box::new(FakeEnum(listeners)),
             Box::new(FakeProcs),
             Prober::new(),
-        );
+            self_port,
+        )
+    }
+
+    fn three_listeners() -> Vec<Listener> {
+        vec![
+            Listener { port: 7777, pid: 1, command: "portbook".into() },
+            Listener { port: 7778, pid: 2, command: "portbook".into() },
+            Listener { port: 3000, pid: 3, command: "node".into() },
+        ]
+    }
+
+    fn enumerated_ports(engine: &Engine) -> Vec<u16> {
+        engine.enumerate().unwrap().into_iter().map(|l| l.port).collect()
+    }
+
+    // Self-exclusion follows the port this process actually serves on, so a
+    // dev daemon on 7778 hides itself and still shows the one on 7777.
+    #[test]
+    fn enumerate_hides_the_configured_self_port() {
+        let engine = engine_on(7778, three_listeners());
+        assert_eq!(enumerated_ports(&engine), vec![7777, 3000]);
+    }
+
+    #[test]
+    fn enumerate_hides_the_default_port_when_left_at_the_default() {
+        let engine = engine_on(DEFAULT_PORT, three_listeners());
+        assert_eq!(enumerated_ports(&engine), vec![7778, 3000]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn run_cycle_emits_skeleton_then_resolved_then_done() {
+        let engine = engine_on(DEFAULT_PORT, two_unbound_listeners());
         let mut cache = NoCache::default();
         let stream = engine.run_cycle(&mut cache);
         let events: Vec<CycleEvent> = futures::StreamExt::collect(Box::pin(stream)).await;
@@ -298,11 +333,7 @@ mod cycle_tests {
             fn retain_present(&mut self, _ls: &[Listener]) {}
         }
 
-        let engine = Engine::with_deps(
-            Box::new(FakeEnum(two_unbound_listeners())),
-            Box::new(FakeProcs),
-            Prober::new(),
-        );
+        let engine = engine_on(DEFAULT_PORT, two_unbound_listeners());
         let mut cache = FullCache;
         let stream = engine.run_cycle(&mut cache);
         let events: Vec<CycleEvent> = futures::StreamExt::collect(Box::pin(stream)).await;

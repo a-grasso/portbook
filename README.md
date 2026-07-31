@@ -65,19 +65,37 @@ portbook tui                   # interactive terminal UI (live, filter, expand, 
 portbook explain 3000          # diagnostic block for a single port (paste into issues)
 portbook explain 3000 --json   # same data as a single JSON object
 portbook completions zsh       # shell completion script (bash, zsh, fish, …)
+portbook serve --port 7778     # serve on a non-default port
+portbook ls --port 7778        # ask the daemon on 7778 instead of 7777
 portbook --version
 ```
 
 Global flags:
 
 - `-v` / `-vv` — increase log verbosity (debug / trace). Overrides `RUST_LOG`.
+- `--port <PORT>` - the port the daemon serves on. `serve` binds it; every other
+  subcommand looks for the daemon there. Defaults to `7777`.
 - `--color=auto|always|never` (on `ls` and `watch`) — color output. Defaults to `auto`; respects the `NO_COLOR` env var.
 
 Environment:
 
 - `PORTBOOK_DEFAULT=ls` — change the no-arg default to `ls` instead of `serve`.
 - `PORTBOOK_NO_OPEN=1` — don't auto-open the browser when starting `serve`.
+- `PORTBOOK_PORT=7778` - same as `--port`; the flag wins when both are set.
 - `NO_COLOR=1` — disable ANSI colors universally.
+
+### Running two at once
+
+`--port` exists so an always-on portbook and a development build can coexist:
+leave the installed one on `7777` and run the build under test on another port.
+
+```sh
+cargo run -- serve --port 7778   # dev daemon; the one on 7777 keeps running
+portbook ls --port 7778          # inspect the dev daemon specifically
+```
+
+Each daemon hides its own port from its listing and shows the other, so you can
+see both from either surface.
 
 ## Agent / script integration
 

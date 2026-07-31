@@ -56,9 +56,10 @@ impl CycleCache for SchedulerCache {
 }
 
 impl Scheduler {
-    pub fn new(state: AppState) -> Self {
+    /// `self_port` is the daemon's own port, excluded from every scan.
+    pub fn new(state: AppState, self_port: u16) -> Self {
         Self {
-            engine: Engine::new(),
+            engine: Engine::new(self_port),
             state,
             cache: SchedulerCache::default(),
         }
