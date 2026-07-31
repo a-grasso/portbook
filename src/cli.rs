@@ -8,7 +8,7 @@ mod tui;
 mod watch;
 mod width;
 
-use crate::BIND_ADDR;
+use crate::bind_addr;
 use crate::engine::Engine;
 use crate::state::Snapshot;
 use render::render;
@@ -28,12 +28,13 @@ pub struct LsOpts {
     pub json: bool,
 }
 
-pub async fn run_ls(opts: LsOpts) -> anyhow::Result<()> {
-    let snapshot = match fetch_from_daemon().await {
+/// `port` is the daemon to ask; on no answer we scan locally instead.
+pub async fn run_ls(opts: LsOpts, port: u16) -> anyhow::Result<()> {
+    let snapshot = match fetch_from_daemon(port).await {
         Some(s) => s,
         // Progress meter is noise for `--json` machine consumers; the function
         // also tty-checks itself but this gate keeps it off entirely for JSON.
-        None => one_shot_scan_with_progress(!opts.json).await?,
+        None => one_shot_scan_with_progress(port, !opts.json).await?,
     };
     let style = Style::resolve(opts.color);
     let width = term_width();
@@ -43,12 +44,12 @@ pub async fn run_ls(opts: LsOpts) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(super) async fn fetch_from_daemon() -> Option<Snapshot> {
+pub(super) async fn fetch_from_daemon(port: u16) -> Option<Snapshot> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(500))
         .build()
         .ok()?;
-    let url = format!("http://{BIND_ADDR}/api/ports");
+    let url = format!("http://{}/api/ports", bind_addr(port));
 
     let snap = fetch_once(&client, &url).await?;
     if !is_skeleton(&snap) {
@@ -86,18 +87,21 @@ fn is_skeleton(snap: &Snapshot) -> bool {
     snap.scan_elapsed_ms.is_none() && snap.ports.iter().any(|c| c.is_pending())
 }
 
-pub(super) async fn one_shot_scan() -> anyhow::Result<Snapshot> {
-    one_shot_scan_with_progress(false).await
+pub(super) async fn one_shot_scan(self_port: u16) -> anyhow::Result<Snapshot> {
+    one_shot_scan_with_progress(self_port, false).await
 }
 
 /// Local one-shot scan. With `show_progress` and a tty stderr, prints a
 /// single-line `probing… N/M (Xs)` indicator and clears it before stdout output.
-pub(super) async fn one_shot_scan_with_progress(show_progress: bool) -> anyhow::Result<Snapshot> {
+pub(super) async fn one_shot_scan_with_progress(
+    self_port: u16,
+    show_progress: bool,
+) -> anyhow::Result<Snapshot> {
     use futures::StreamExt;
     use std::io::IsTerminal;
 
     let start = std::time::Instant::now();
-    let engine = Engine::new();
+    let engine = Engine::new(self_port);
     let pairs = engine.enumerate_with_procs()?;
     let total = pairs.len();
 

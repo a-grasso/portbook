@@ -7,7 +7,7 @@
 //! frames under load is the right behavior. The producer never blocks
 //! on a slow renderer.
 
-use crate::BIND_ADDR;
+use crate::bind_addr;
 use crate::discovery::Listener;
 use crate::engine::{CycleCache, CycleEvent, Engine};
 use crate::state::{PortCard, Snapshot};
@@ -26,8 +26,8 @@ const POLL_INTERVAL: Duration = Duration::from_secs(3);
 
 /// Cheap "is the daemon up?" check used to label the source in the
 /// footer. Probing /api/ports is enough — if it answers, SSE will too.
-pub async fn daemon_alive() -> bool {
-    let url = format!("http://{BIND_ADDR}/api/ports");
+pub async fn daemon_alive(port: u16) -> bool {
+    let url = format!("http://{}/api/ports", bind_addr(port));
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_millis(300))
         .build()
@@ -38,20 +38,20 @@ pub async fn daemon_alive() -> bool {
     matches!(client.get(&url).send().await, Ok(r) if r.status().is_success())
 }
 
-pub fn spawn(tx: Sender<Snapshot>) {
+pub fn spawn(tx: Sender<Snapshot>, port: u16) {
     tokio::spawn(async move {
-        if try_sse(tx.clone()).await {
+        if try_sse(tx.clone(), port).await {
             return;
         }
-        poll_loop(tx).await;
+        poll_loop(tx, port).await;
     });
 }
 
 /// Connect to /api/stream and forward decoded snapshots. Returns true if
 /// the connection was established and a forwarder task was spawned, false
 /// if the daemon isn't reachable.
-async fn try_sse(tx: Sender<Snapshot>) -> bool {
-    let url = format!("http://{BIND_ADDR}/api/stream");
+async fn try_sse(tx: Sender<Snapshot>, port: u16) -> bool {
+    let url = format!("http://{}/api/stream", bind_addr(port));
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_millis(500))
         .build()
@@ -147,8 +147,8 @@ fn find_event_boundary(bytes: &[u8]) -> Option<usize> {
     bytes.windows(2).position(|w| w == b"\n\n")
 }
 
-async fn poll_loop(tx: Sender<Snapshot>) {
-    let engine = Engine::new();
+async fn poll_loop(tx: Sender<Snapshot>, self_port: u16) {
+    let engine = Engine::new(self_port);
     let mut cache = TuiCache::default();
 
     if run_one_cycle(&engine, &tx, &mut cache, true).await == CycleOutcome::ChannelClosed {
@@ -290,6 +290,7 @@ mod cycle_tests {
             Box::new(FakeEnum(ports())),
             Box::new(FakeProcs),
             Prober::new(),
+            crate::DEFAULT_PORT,
         );
         let mut cache = TuiCache::default();
 
