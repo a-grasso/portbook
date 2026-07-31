@@ -14,7 +14,15 @@ struct Cli {
 
     /// Port the daemon serves on: where `serve` binds, and where the other
     /// subcommands look for it. Lets a dev build run beside an always-on one.
-    #[arg(long, global = true, env = "PORTBOOK_PORT", default_value_t = portbook::DEFAULT_PORT)]
+    // Range starts at 1: port 0 would bind an ephemeral port while the Host
+    // allowlist stayed pinned to 0, 403-ing every request.
+    #[arg(
+        long,
+        global = true,
+        env = "PORTBOOK_PORT",
+        default_value_t = portbook::DEFAULT_PORT,
+        value_parser = clap::value_parser!(u16).range(1..),
+    )]
     port: u16,
 
     #[command(subcommand)]
@@ -226,6 +234,15 @@ mod port_flag_tests {
             }
         }
         parsed
+    }
+
+    /// Port 0 means "any free port" to the OS, but the Host allowlist is built
+    /// before the bind, from the literal 0. The daemon would come up on an
+    /// ephemeral port and 403 every request while logging itself as listening.
+    /// Reject it up front rather than shipping that silent failure.
+    #[test]
+    fn port_zero_is_rejected() {
+        assert!(Cli::try_parse_from(["portbook", "serve", "--port", "0"]).is_err());
     }
 
     #[test]
