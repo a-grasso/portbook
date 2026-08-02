@@ -32,6 +32,39 @@
    Sensitive transformations (cmdline redaction, host-header guard,
    etc.) happen in the core or the API boundary, never in a view.
 
+6. **Portbook is read-only. It never mutates the processes it observes.**
+   No surface kills, signals, restarts, or spawns a process. This is a
+   deliberate non-goal, not a missing feature — see below.
+
+---
+
+## Non-goal: killing and restarting processes
+
+Portbook observes; it does not act. Concretely: no `kill`/`restart`
+keystroke, subcommand, or endpoint, now or later. The reasoning, so it
+does not get re-litigated:
+
+- **Read-only is the safety property.** It is why the daemon can sit on
+  a localhost port and why an agent can be pointed at portbook without
+  a second thought. The host-header guard stops DNS rebinding, but it
+  does not stop any open web page from POSTing to a local endpoint —
+  a read-only server shrugs at that, a killing one does not.
+- **Restart is not implementable honestly.** Portbook never owned the
+  process. It reconstructs a lossy cmdline from `ps` and a cwd from
+  `lsof`, with no environment, no parent shell (so no `nvm`/`direnv`
+  shims), and no tty. And the cmdline we hold is *redacted by design*
+  (`src/redact.rs`), so it is deliberately not runnable. A restart that
+  works most of the time is worse than none: it fails silently in
+  exactly the cases the user cares about.
+- **The pid is not a stable handle.** Between a scan and a click the
+  pid may have exited and been recycled; and on macOS the pid bound to
+  a port is often a child that its supervisor respawns instantly.
+
+The supported answer to "my dev server died" is BACKLOG item B: persist
+the last-seen command and cwd, show them, let the human paste into a
+shell they own. Anything more means portbook *launches* processes
+itself, which is a different tool.
+
 ---
 
 ## Layer map
